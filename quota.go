@@ -471,140 +471,455 @@ const statsHTMLTemplate = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenCode Go Usage Stats</title>
+<title>OpenCode Go Stats</title>
 <style>
   :root {
-    --bg: #0f172a;
-    --panel: #1e293b;
-    --panel-alt: #0b1120;
-    --border: #334155;
-    --text: #f8fafc;
-    --muted: #94a3b8;
-    --accent: #38bdf8;
+    --bg-secondary: #faf9f5;
+    --bg-primary: #f0eee8;
+    --bg-tertiary: #e9e6df;
+    --bg-hover: #e9e6df;
+    --text-primary: #2d2a26;
+    --text-secondary: #6d6760;
+    --text-tertiary: #a29c95;
+    --border-color: #e3e1db;
+    --border-primary: #d5d2cb;
+    --border-hover: #cecac4;
+    --primary-color: #8b8680;
+    --primary-hover: #7f7a74;
+    --primary-active: #726d67;
+    --primary-contrast: #ffffff;
+    --success-color: #10b981;
+    --quota-medium-color: #e0aa14;
+    --warning-color: #c65746;
+    --error-color: #c65746;
+    --viz-success: #10b981;
+    --viz-failure: #c65746;
+    --success-badge-bg: #d1fae5;
+    --success-badge-text: #065f46;
+    --failure-badge-bg: rgba(198, 87, 70, 0.14);
+    --failure-badge-text: #8a3a30;
+    --count-badge-bg: rgba(139, 134, 128, 0.18);
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
   }
+
+  [data-theme='white'] {
+    --bg-secondary: #ffffff;
+    --bg-primary: #ffffff;
+    --bg-tertiary: #f6f6f6;
+    --bg-hover: #f6f6f6;
+    --border-color: #e5e5e5;
+    --border-primary: #d9d9d9;
+    --border-hover: #cccccc;
+  }
+
+  [data-theme='dark'] {
+    --bg-secondary: #151412;
+    --bg-primary: #1d1b18;
+    --bg-tertiary: #262320;
+    --bg-hover: #2e2a26;
+    --text-primary: #f6f4f1;
+    --text-secondary: #c9c3bb;
+    --text-tertiary: #9c958d;
+    --border-color: #3a3530;
+    --border-primary: #4a453f;
+    --border-hover: #5a544d;
+    --primary-color: #8b8680;
+    --primary-hover: #9a948e;
+    --primary-active: #a6a099;
+    --primary-contrast: #ffffff;
+    --quota-medium-color: #ffd862;
+    --viz-success: #0fae78;
+    --viz-failure: #cf4b3a;
+    --success-badge-bg: rgba(6, 78, 59, 0.3);
+    --success-badge-text: #6ee7b7;
+    --failure-badge-bg: rgba(198, 87, 70, 0.24);
+    --failure-badge-text: #f1b0a6;
+    --count-badge-bg: rgba(139, 134, 128, 0.28);
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.3);
+  }
+
   * { box-sizing: border-box; }
-  body {
+  html, body {
     margin: 0;
-    padding: 24px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
+    padding: 0;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  .container { max-width: 1280px; margin: 0 auto; }
-  header {
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+  ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+  .main-content {
+    padding: 70px clamp(20px, 3vw, 48px) 40px;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--border);
+    flex-direction: column;
+    gap: 20px;
+    max-width: 100%;
   }
-  h1 { margin: 0; font-size: 1.45rem; }
-  .subtitle { color: var(--muted); font-size: 0.88rem; margin-top: 4px; }
+
+  .page-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .page-title {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+  .page-desc {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+    background: var(--bg-primary);
+    flex-wrap: wrap;
+  }
+  .status-pills {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: var(--radius-full);
+    border: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--success-color);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+  }
+  .status-label { color: var(--text-secondary); }
+  .status-value { color: var(--text-primary); font-weight: 700; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 150ms ease;
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .btn:hover {
+    background-color: var(--bg-hover);
+    border-color: var(--border-hover);
+  }
+  .btn-danger {
+    background-color: var(--failure-badge-bg);
+    color: var(--failure-badge-text);
+    border-color: color-mix(in srgb, var(--error-color) 40%, var(--border-color));
+  }
+  .btn-danger:hover {
+    background-color: var(--error-color);
+    color: #ffffff;
+  }
+
   .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 16px;
-    margin-bottom: 20px;
   }
   .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
     padding: 16px;
+    box-shadow: var(--shadow-sm);
   }
-  .metric-title { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; font-weight: 600; }
-  .metric-val { font-size: 1.4rem; font-weight: 700; margin: 6px 0; }
-  .bar-bg { background: var(--panel-alt); height: 8px; border-radius: 4px; overflow: hidden; }
-  .bar-fill { background: var(--accent); height: 100%; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-  th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
-  th { color: var(--muted); font-size: 0.76rem; text-transform: uppercase; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  button {
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 7px 12px;
-    cursor: pointer;
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
   }
-  button:hover { border-color: var(--accent); }
+  .card-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .bucket-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .bucket-title {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .bucket-pct {
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .bucket-val {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 4px 0 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .bucket-cap {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+  }
+
+  /* CPA QuotaMeter */
+  .quota-bar {
+    background: var(--bg-tertiary);
+    height: 7px;
+    border-radius: var(--radius-full);
+    overflow: hidden;
+  }
+  .quota-fill {
+    height: 100%;
+    border-radius: var(--radius-full);
+    transition: width 260ms ease;
+  }
+  .quota-fill.high { background: var(--viz-success); }
+  .quota-fill.medium { background: var(--quota-medium-color); }
+  .quota-fill.low { background: var(--viz-failure); }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th, td {
+    padding: 8px 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 65%, transparent);
+    text-align: left;
+    white-space: nowrap;
+  }
+  th {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  tbody tr:hover {
+    background-color: color-mix(in srgb, var(--bg-tertiary) 65%, transparent);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: var(--radius-full);
+    background: var(--count-badge-bg);
+    color: var(--text-secondary);
+  }
+  .mono {
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .subtle { color: var(--text-tertiary); }
 </style>
 </head>
 <body>
-<div class="container">
-  <header>
-    <div>
-      <h1>OpenCode Go Usage Stats</h1>
-      <div class="subtitle" id="planSubtitle"></div>
-    </div>
-    <div>
-      <button onclick="location.reload()">Refresh</button>
-      <button onclick="if(confirm('Reset tracked counters?')) location.search='?op=reset'">Reset Counters</button>
-    </div>
+<main class="main-content">
+  <header class="page-header">
+    <h1 class="page-title">OpenCode Go Stats</h1>
+    <p class="page-desc">Rolling allowance windows and per-model token and cost telemetry reported by OpenCode Go.</p>
   </header>
+
+  <div class="status-bar">
+    <div class="status-pills">
+      <span class="status-pill">
+        <span class="status-dot"></span>
+        <span class="status-label">Plan</span>
+        <span class="status-value" id="planBadge">OpenCode Go</span>
+      </span>
+      <span class="status-pill">
+        <span class="status-label">Active Models</span>
+        <span class="status-value" id="activeModelsCount">0</span>
+      </span>
+      <span class="status-pill">
+        <span class="status-label">Total Requests</span>
+        <span class="status-value" id="totalReqCount">0</span>
+      </span>
+    </div>
+    <div class="toolbar">
+      <button class="btn" onclick="location.reload()">Refresh</button>
+      <button class="btn btn-danger" onclick="if(confirm('Reset tracked OpenCode Go usage counters?')) location.search='?op=reset'">Reset Counters</button>
+    </div>
+  </div>
 
   <div class="cards" id="bucketCards"></div>
 
-  <div class="card">
-    <h2 style="margin:0 0 12px 0;font-size:1.05rem;">Per-Model Breakdown (Exact <code>usage.opencode</code> Telemetry)</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Model</th>
-          <th>Protocol</th>
-          <th>Requests</th>
-          <th>Input Tok</th>
-          <th>Output Tok</th>
-          <th>Reasoning Tok</th>
-          <th>Cache Read</th>
-          <th>List Cost</th>
-          <th>Allowance Deducted</th>
-          <th>Weight</th>
-          <th>5h Allowance</th>
-          <th>7d Allowance</th>
-        </tr>
-      </thead>
-      <tbody id="modelsBody"></tbody>
-    </table>
-  </div>
-</div>
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Per-Model Allowance &amp; Token Breakdown</h2>
+      <span class="badge">Exact <code>usage.opencode</code> Telemetry</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Protocol</th>
+            <th>Requests</th>
+            <th>Input Tok</th>
+            <th>Output Tok</th>
+            <th>Reasoning Tok</th>
+            <th>Cache Read</th>
+            <th>List Cost</th>
+            <th>Allowance Used</th>
+            <th>Weight</th>
+            <th>5h Allowance</th>
+            <th>7d Allowance</th>
+          </tr>
+        </thead>
+        <tbody id="modelsBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
 <script>
 const data = __INITIAL_STATS_JSON__;
-document.getElementById('planSubtitle').textContent = data.plan + ' · Exact per-request allowance & list_cost reported by OpenCode Go';
+
+function syncThemeWithCPA() {
+  const apply = (mode) => {
+    if (mode === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else if (mode === 'white') {
+      document.documentElement.setAttribute('data-theme', 'white');
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  };
+  try {
+    if (window.parent && window.parent !== window && window.parent.document) {
+      const parentDoc = window.parent.document.documentElement;
+      const syncFromParent = () => apply(parentDoc.getAttribute('data-theme'));
+      syncFromParent();
+      new MutationObserver(syncFromParent).observe(parentDoc, { attributes: true, attributeFilter: ['data-theme'] });
+      return;
+    }
+  } catch (_) {}
+  try {
+    const raw = localStorage.getItem('cli-proxy-theme');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const t = parsed?.state?.theme;
+      if (t === 'dark' || t === 'white' || t === 'light') {
+        apply(t);
+        return;
+      }
+    }
+  } catch (_) {}
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    apply('dark');
+  }
+}
+
+syncThemeWithCPA();
+
+const models = data.models || [];
+const totalReqs = models.reduce((acc, m) => acc + (m.requests || 0), 0);
+document.getElementById('planBadge').textContent = data.plan || 'OpenCode Go';
+document.getElementById('activeModelsCount').textContent = String(models.length);
+document.getElementById('totalReqCount').textContent = totalReqs.toLocaleString();
 
 function renderBucket(label, used, cap) {
-  const pct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
-  const remPct = Math.max(0, 100 - pct);
+  const usedPct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
+  const remPct = Math.max(0, 100 - usedPct);
+  const tier = remPct >= 70 ? 'high' : (remPct >= 30 ? 'medium' : 'low');
   return '<div class="card">' +
-    '<div class="metric-title">' + label + '</div>' +
-    '<div class="metric-val">$' + used.toFixed(4) + ' <span style="font-size:0.9rem;color:#94a3b8;font-weight:400;">/ $' + cap.toFixed(2) + ' (' + remPct.toFixed(1) + '% left)</span></div>' +
-    '<div class="bar-bg"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+    '<div class="bucket-header">' +
+      '<span class="bucket-title">' + label + '</span>' +
+      '<span class="bucket-pct">' + remPct.toFixed(1) + '% remaining</span>' +
+    '</div>' +
+    '<div class="bucket-val">$' + used.toFixed(4) + ' <span class="bucket-cap">/ $' + cap.toFixed(2) + '</span></div>' +
+    '<div class="quota-bar"><div class="quota-fill ' + tier + '" style="width:' + remPct.toFixed(1) + '%"></div></div>' +
   '</div>';
 }
 
 document.getElementById('bucketCards').innerHTML =
-  renderBucket('5-Hour Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 48) +
-  renderBucket('Weekly Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 120) +
-  renderBucket('Monthly Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 240);
+  renderBucket('5-Hour Rolling Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 48) +
+  renderBucket('Weekly Rolling Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 120) +
+  renderBucket('Monthly Rolling Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 240);
 
 const tbody = document.getElementById('modelsBody');
-const models = data.models || [];
 if (models.length === 0) {
-  tbody.innerHTML = '<tr><td colspan="12" style="color:#94a3b8;text-align:center;padding:18px;">No OpenCode Go requests recorded yet in this session.</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="12" class="subtle" style="text-align:center;padding:24px;">No OpenCode Go requests recorded yet in this session.</td></tr>';
 } else {
   tbody.innerHTML = models.map(m => '<tr>' +
-    '<td><strong>' + m.display_name + '</strong> <span class="mono" style="color:#94a3b8;">(' + m.model + ')</span></td>' +
-    '<td class="mono">' + m.protocol + '</td>' +
-    '<td>' + m.requests + '</td>' +
-    '<td>' + m.input_tokens.toLocaleString() + '</td>' +
-    '<td>' + m.output_tokens.toLocaleString() + '</td>' +
-    '<td>' + m.reasoning_tokens.toLocaleString() + '</td>' +
-    '<td>' + m.cache_read_tokens.toLocaleString() + '</td>' +
+    '<td><strong>' + m.display_name + '</strong> <span class="mono subtle">(' + m.model + ')</span></td>' +
+    '<td><span class="badge mono">' + m.protocol + '</span></td>' +
+    '<td class="mono">' + m.requests.toLocaleString() + '</td>' +
+    '<td class="mono">' + m.input_tokens.toLocaleString() + '</td>' +
+    '<td class="mono">' + m.output_tokens.toLocaleString() + '</td>' +
+    '<td class="mono">' + m.reasoning_tokens.toLocaleString() + '</td>' +
+    '<td class="mono">' + m.cache_read_tokens.toLocaleString() + '</td>' +
     '<td class="mono">$' + m.list_cost_usd.toFixed(5) + '</td>' +
     '<td class="mono"><strong>$' + m.allowance_usd.toFixed(5) + '</strong></td>' +
-    '<td class="mono">' + (m.weight_ratio ? m.weight_ratio + 'x' : '—') + '</td>' +
+    '<td class="mono">' + (m.weight_ratio ? m.weight_ratio + '×' : '—') + '</td>' +
     '<td class="mono">$' + m.allowance_5h_usd.toFixed(5) + '</td>' +
     '<td class="mono">$' + m.allowance_7d_usd.toFixed(5) + '</td>' +
   '</tr>').join('');
