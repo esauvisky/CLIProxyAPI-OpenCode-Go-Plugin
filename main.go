@@ -74,7 +74,7 @@ const (
 	pluginID      = "opencode-go-oauth"
 	providerID    = "opencode-go"
 	pluginName    = "OpenCode Go"
-	pluginVersion = "0.1.5"
+	pluginVersion = "0.1.6"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png"

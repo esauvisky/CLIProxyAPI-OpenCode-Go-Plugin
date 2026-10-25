@@ -401,6 +401,11 @@ func managementRegistrationPayload() managementRegistration {
 				Path:        mgmtStatsRoutePath,
 				Description: "Returns per-model OpenCode Go allowance and token usage stats.",
 			},
+			{
+				Method:      http.MethodPost,
+				Path:        mgmtStatsRoutePath,
+				Description: "Resets tracked OpenCode Go allowance and token usage counters.",
+			},
 		},
 		Resources: []managementResource{
 			{
@@ -417,43 +422,44 @@ func handleManagement(raw []byte) ([]byte, error) {
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &req)
 	}
-	now := time.Now().UTC()
-	if req.Query != nil && strings.EqualFold(req.Query.Get("op"), "reset") {
-		_, _ = handleQuotaReset(nil)
-	}
-	planLabel, cap5h, cap7d, cap30d := resolveAllowanceCaps()
-	used5h, used7d, used30d, _, _, _, models := computeWindowTotals("", now)
+	cleanedPath := strings.TrimRight(strings.TrimSpace(req.Path), "/")
+	if strings.HasSuffix(cleanedPath, mgmtStatsRoutePath) {
+		if strings.EqualFold(req.Method, http.MethodPost) {
+			_, _ = handleQuotaReset(nil)
+		}
+		now := time.Now().UTC()
+		planLabel, cap5h, cap7d, cap30d := resolveAllowanceCaps()
+		used5h, used7d, used30d, _, _, _, models := computeWindowTotals("", now)
 
-	payload := map[string]any{
-		"plan":             planLabel,
-		"used_5h_usd":      used5h,
-		"cap_5h_usd":       cap5h,
-		"used_weekly_usd":  used7d,
-		"cap_weekly_usd":   cap7d,
-		"used_monthly_usd": used30d,
-		"cap_monthly_usd":  cap30d,
-		"models":           models,
-	}
-
-	if (req.Query != nil && strings.EqualFold(req.Query.Get("format"), "json")) ||
-		strings.HasSuffix(strings.TrimRight(req.Path, "/"), mgmtStatsRoutePath) {
+		payload := map[string]any{
+			"plan":             planLabel,
+			"used_5h_usd":      used5h,
+			"cap_5h_usd":       cap5h,
+			"used_weekly_usd":  used7d,
+			"cap_weekly_usd":   cap7d,
+			"used_monthly_usd": used30d,
+			"cap_monthly_usd":  cap30d,
+			"models":           models,
+		}
 		body, _ := marshalJSONNoEscape(payload)
 		return okEnvelope(managementResponse{
 			StatusCode: http.StatusOK,
-			Headers:    http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
-			Body:       body,
+			Headers: http.Header{
+				"Content-Type":  []string{"application/json; charset=utf-8"},
+				"Cache-Control": []string{"no-store"},
+			},
+			Body: body,
 		})
 	}
 
-	stateJSON, _ := marshalJSONNoEscape(payload)
-	htmlDoc := strings.Replace(statsHTMLTemplate, "__INITIAL_STATS_JSON__", string(stateJSON), 1)
+	// /v0/resource/plugins/opencode-go-oauth/stats serves only the static UI asset.
 	return okEnvelope(managementResponse{
 		StatusCode: http.StatusOK,
 		Headers: http.Header{
 			"Content-Type":  []string{"text/html; charset=utf-8"},
 			"Cache-Control": []string{"no-store"},
 		},
-		Body: []byte(htmlDoc),
+		Body: []byte(statsHTMLTemplate),
 	})
 }
 
@@ -805,8 +811,8 @@ const statsHTMLTemplate = `<!doctype html>
       </span>
     </div>
     <div class="toolbar">
-      <button class="btn" onclick="location.reload()">Refresh</button>
-      <button class="btn btn-danger" onclick="if(confirm('Reset tracked OpenCode Go usage counters?')) location.search='?op=reset'">Reset Counters</button>
+      <button class="btn" onclick="loadStats()">Refresh</button>
+      <button class="btn btn-danger" onclick="resetStats()">Reset Counters</button>
     </div>
   </div>
 
@@ -841,7 +847,8 @@ const statsHTMLTemplate = `<!doctype html>
   </section>
 </main>
 <script>
-const data = __INITIAL_STATS_JSON__;
+const STATS_API_URL = '/v0/management/plugins/opencode-go-oauth/stats';
+let data = { plan: 'OpenCode Go', used_5h_usd: 0, cap_5h_usd: 48, used_weekly_usd: 0, cap_weekly_usd: 120, used_monthly_usd: 0, cap_monthly_usd: 240, models: [] };
 
 function syncThemeWithCPA() {
   const apply = (mode) => {
@@ -878,13 +885,54 @@ function syncThemeWithCPA() {
   }
 }
 
-syncThemeWithCPA();
+function deobfuscateCPASecret(payload) {
+  const prefix = 'enc::v1::';
+  if (!payload || !payload.startsWith(prefix)) return payload;
+  try {
+    const bin = atob(payload.slice(prefix.length));
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const keyStr = 'cli-proxy-api-webui::secure-storage|' + window.location.host + '|' + navigator.userAgent;
+    const keyBytes = new TextEncoder().encode(keyStr);
+    const out = new Uint8Array(arr.length);
+    for (let i = 0; i < arr.length; i++) out[i] = arr[i] ^ keyBytes[i % keyBytes.length];
+    return new TextDecoder().decode(out);
+  } catch (_) {
+    return payload;
+  }
+}
 
-const models = data.models || [];
-const totalReqs = models.reduce((acc, m) => acc + (m.requests || 0), 0);
-document.getElementById('planBadge').textContent = data.plan || 'OpenCode Go';
-document.getElementById('activeModelsCount').textContent = String(models.length);
-document.getElementById('totalReqCount').textContent = totalReqs.toLocaleString();
+function detectStoredManagementKey() {
+  try {
+    const authRaw = localStorage.getItem('cli-proxy-auth');
+    if (authRaw) {
+      const parsed = JSON.parse(authRaw);
+      const k = parsed?.state?.managementKey;
+      if (k && typeof k === 'string' && k.trim()) return k.trim();
+    }
+    const legacy = localStorage.getItem('managementKey');
+    if (legacy) {
+      const dec = deobfuscateCPASecret(legacy);
+      try {
+        const parsed = JSON.parse(dec);
+        if (typeof parsed === 'string' && parsed.trim()) return parsed.trim();
+      } catch (_) {
+        if (typeof dec === 'string' && dec.trim()) return dec.trim();
+      }
+    }
+  } catch (_) {}
+  return '';
+}
+
+function authHeaders() {
+  const key = detectStoredManagementKey();
+  const headers = { 'Content-Type': 'application/json' };
+  if (key) {
+    headers['Authorization'] = 'Bearer ' + key;
+    headers['X-Management-Key'] = key;
+  }
+  return headers;
+}
 
 function renderBucket(label, used, cap) {
   const usedPct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
@@ -900,30 +948,63 @@ function renderBucket(label, used, cap) {
   '</div>';
 }
 
-document.getElementById('bucketCards').innerHTML =
-  renderBucket('5-Hour Rolling Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 48) +
-  renderBucket('Weekly Rolling Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 120) +
-  renderBucket('Monthly Rolling Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 240);
+function renderStats() {
+  const models = data.models || [];
+  const totalReqs = models.reduce((acc, m) => acc + (m.requests || 0), 0);
+  document.getElementById('planBadge').textContent = data.plan || 'OpenCode Go';
+  document.getElementById('activeModelsCount').textContent = String(models.length);
+  document.getElementById('totalReqCount').textContent = totalReqs.toLocaleString();
 
-const tbody = document.getElementById('modelsBody');
-if (models.length === 0) {
-  tbody.innerHTML = '<tr><td colspan="12" class="subtle" style="text-align:center;padding:24px;">No OpenCode Go requests recorded yet in this session.</td></tr>';
-} else {
-  tbody.innerHTML = models.map(m => '<tr>' +
-    '<td><strong>' + m.display_name + '</strong> <span class="mono subtle">(' + m.model + ')</span></td>' +
-    '<td><span class="badge mono">' + m.protocol + '</span></td>' +
-    '<td class="mono">' + m.requests.toLocaleString() + '</td>' +
-    '<td class="mono">' + m.input_tokens.toLocaleString() + '</td>' +
-    '<td class="mono">' + m.output_tokens.toLocaleString() + '</td>' +
-    '<td class="mono">' + m.reasoning_tokens.toLocaleString() + '</td>' +
-    '<td class="mono">' + m.cache_read_tokens.toLocaleString() + '</td>' +
-    '<td class="mono">$' + m.list_cost_usd.toFixed(5) + '</td>' +
-    '<td class="mono"><strong>$' + m.allowance_usd.toFixed(5) + '</strong></td>' +
-    '<td class="mono">' + (m.weight_ratio ? m.weight_ratio + '×' : '—') + '</td>' +
-    '<td class="mono">$' + m.allowance_5h_usd.toFixed(5) + '</td>' +
-    '<td class="mono">$' + m.allowance_7d_usd.toFixed(5) + '</td>' +
-  '</tr>').join('');
+  document.getElementById('bucketCards').innerHTML =
+    renderBucket('5-Hour Rolling Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 48) +
+    renderBucket('Weekly Rolling Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 120) +
+    renderBucket('Monthly Rolling Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 240);
+
+  const tbody = document.getElementById('modelsBody');
+  if (models.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="12" class="subtle" style="text-align:center;padding:24px;">No OpenCode Go requests recorded yet in this session.</td></tr>';
+  } else {
+    tbody.innerHTML = models.map(m => '<tr>' +
+      '<td><strong>' + m.display_name + '</strong> <span class="mono subtle">(' + m.model + ')</span></td>' +
+      '<td><span class="badge mono">' + m.protocol + '</span></td>' +
+      '<td class="mono">' + m.requests.toLocaleString() + '</td>' +
+      '<td class="mono">' + m.input_tokens.toLocaleString() + '</td>' +
+      '<td class="mono">' + m.output_tokens.toLocaleString() + '</td>' +
+      '<td class="mono">' + m.reasoning_tokens.toLocaleString() + '</td>' +
+      '<td class="mono">' + m.cache_read_tokens.toLocaleString() + '</td>' +
+      '<td class="mono">$' + m.list_cost_usd.toFixed(5) + '</td>' +
+      '<td class="mono"><strong>$' + m.allowance_usd.toFixed(5) + '</strong></td>' +
+      '<td class="mono">' + (m.weight_ratio ? m.weight_ratio + '×' : '—') + '</td>' +
+      '<td class="mono">$' + m.allowance_5h_usd.toFixed(5) + '</td>' +
+      '<td class="mono">$' + m.allowance_7d_usd.toFixed(5) + '</td>' +
+    '</tr>').join('');
+  }
 }
+
+async function loadStats() {
+  try {
+    const resp = await fetch(STATS_API_URL, { method: 'GET', headers: authHeaders(), cache: 'no-store' });
+    if (resp.ok) {
+      data = await resp.json();
+      renderStats();
+    }
+  } catch (_) {}
+}
+
+async function resetStats() {
+  if (!confirm('Reset tracked OpenCode Go usage counters?')) return;
+  try {
+    const resp = await fetch(STATS_API_URL, { method: 'POST', headers: authHeaders(), cache: 'no-store' });
+    if (resp.ok) {
+      data = await resp.json();
+      renderStats();
+    }
+  } catch (_) {}
+}
+
+syncThemeWithCPA();
+renderStats();
+void loadStats();
 </script>
 </body>
 </html>

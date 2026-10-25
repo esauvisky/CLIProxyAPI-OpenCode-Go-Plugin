@@ -8,18 +8,37 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: CLIProxyAPI-OpenCode-Go-Plugin
+      - uses: actions/checkout@v4
+        with:
+          repository: router-for-me/CLIProxyAPI
+          path: CLIProxyAPI
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Build and test
+        working-directory: CLIProxyAPI-OpenCode-Go-Plugin
+        run: |
+          go mod tidy
+          make test
+
   plugin:
+    needs: test
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            artifact: linux-amd64
-            goos: linux
-            goarch: amd64
-          - runner: ubuntu-24.04-arm
-            artifact: linux-arm64
-            goos: linux
-            goarch: arm64
+          - { runner: ubuntu-latest,    goos: linux,   goarch: amd64, lib: opencode-go-oauth.so }
+          - { runner: ubuntu-24.04-arm, goos: linux,   goarch: arm64, lib: opencode-go-oauth.so }
+          - { runner: macos-latest,     goos: darwin,  goarch: arm64, lib: opencode-go-oauth.dylib, cc: "clang -arch arm64" }
+          - { runner: macos-latest,     goos: darwin,  goarch: amd64, lib: opencode-go-oauth.dylib, cc: "clang -arch x86_64" }
+          - { runner: windows-latest,   goos: windows, goarch: amd64, lib: opencode-go-oauth.dll }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -31,32 +50,25 @@ jobs:
           path: CLIProxyAPI
       - uses: actions/setup-go@v5
         with:
-          go-version-file: CLIProxyAPI/go.mod
-      - name: Build and test
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Build shared library
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
+        shell: bash
         env:
-          GOTOOLCHAIN: auto
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "1"
+          CC: ${{ matrix.cc }}
         run: |
+          mkdir -p build
           go mod tidy
-          make test
-      - name: Name release artifact
-        working-directory: CLIProxyAPI-OpenCode-Go-Plugin
-        run: cp build/opencode-go-oauth.so build/opencode-go-oauth-${{ matrix.artifact }}.so
-      - name: Package Plugin Store archive
-        if: startsWith(github.ref, 'refs/tags/v')
-        working-directory: CLIProxyAPI-OpenCode-Go-Plugin
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          version="${RELEASE_VERSION#v}"
-          archive="opencode-go-oauth_${version}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
-          (cd build && zip "$archive" opencode-go-oauth.so)
+          go build -mod=mod -trimpath -buildvcs=false -buildmode=c-shared -o "build/${{ matrix.lib }}" .
+          test -s "build/${{ matrix.lib }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: opencode-go-oauth-${{ matrix.artifact }}
-          path: |
-            CLIProxyAPI-OpenCode-Go-Plugin/build/opencode-go-oauth-${{ matrix.artifact }}.so
-            CLIProxyAPI-OpenCode-Go-Plugin/build/opencode-go-oauth_*.zip
+          name: lib-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: CLIProxyAPI-OpenCode-Go-Plugin/build/${{ matrix.lib }}
           if-no-files-found: error
 
   release:
@@ -68,18 +80,25 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: opencode-go-oauth-*
           path: artifacts
-          merge-multiple: true
-      - name: Publish release
+      - name: Package Plugin Store archives and publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd artifacts
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for dir in artifacts/lib-*; do
+            target="$(basename "$dir")"
+            rest="${target#lib-}"
+            goos="${rest%-*}"
+            goarch="${rest##*-}"
+            zip -9 -j "dist/opencode-go-oauth_${version}_${goos}_${goarch}.zip" "$dir"/*
+          done
+          cd dist
           sha256sum opencode-go-oauth_*.zip > checksums.txt
+          cat checksums.txt
           gh release create "$GITHUB_REF_NAME" \
-            opencode-go-oauth-linux-amd64.so \
-            opencode-go-oauth-linux-arm64.so \
             opencode-go-oauth_*.zip \
             checksums.txt \
             --repo "$GITHUB_REPOSITORY" \
