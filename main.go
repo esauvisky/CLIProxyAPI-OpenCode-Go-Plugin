@@ -74,7 +74,7 @@ const (
 	pluginID      = "opencode-go-oauth"
 	providerID    = "opencode-go"
 	pluginName    = "OpenCode Go"
-	pluginVersion = "0.1.6"
+	pluginVersion = "0.1.7"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png"
@@ -162,7 +162,7 @@ func defaultPluginConfig() pluginConfig {
 		UserAgent:        defaultUserAgent,
 		ConsoleURL:       defaultConsoleURL,
 		InferenceBaseURL: defaultInferenceBaseURL,
-		Plan:             "auto",
+		Plan:             "go",
 	}
 }
 
@@ -190,7 +190,7 @@ func configurePlugin(raw []byte) error {
 	cfg.UserAgent = firstNonEmpty(cfg.UserAgent, defaultUserAgent)
 	cfg.ConsoleURL = strings.TrimRight(firstNonEmpty(cfg.ConsoleURL, defaultConsoleURL), "/")
 	cfg.InferenceBaseURL = strings.TrimRight(firstNonEmpty(cfg.InferenceBaseURL, defaultInferenceBaseURL), "/")
-	cfg.Plan = strings.ToLower(firstNonEmpty(cfg.Plan, "auto"))
+	cfg.Plan = strings.ToLower(firstNonEmpty(cfg.Plan, "go"))
 	activeConfig.Store(cfg)
 	return nil
 }
@@ -214,9 +214,9 @@ func pluginRegistration() registration {
 				{
 					Name:        "plan",
 					Type:        pluginapi.ConfigFieldTypeEnum,
-					Default:     "auto",
-					EnumValues:  []string{"auto", "go", "go-plus"},
-					Description: "Subscription tier for allowance bucket calculations (auto detects from response billing_source).",
+					Default:     "go",
+					EnumValues:  []string{"go", "go-plus"},
+					Description: "Subscription tier for allowance bucket calculations: go ($10/mo, $12/$30/$60) or go-plus ($40/mo, $48/$120/$240).",
 				},
 			},
 		},

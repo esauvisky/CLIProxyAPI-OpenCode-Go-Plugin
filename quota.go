@@ -71,7 +71,6 @@ var (
 	usageMu            sync.RWMutex
 	usageEvents        []allowanceEvent
 	usageTotalsByModel = make(map[string]*perModelUsageSummary)
-	detectedPlanTier   = "go-plus"
 )
 
 func parseOpenCodeUsageNode(u gjson.Result) (openCodeUsageSample, bool) {
@@ -153,13 +152,6 @@ func commitOpenCodeStreamUsage(authID, model string, sample openCodeUsageSample)
 	usageMu.Lock()
 	defer usageMu.Unlock()
 
-	if sample.BillingSource != "" {
-		lower := strings.ToLower(sample.BillingSource)
-		if lower == "go" || lower == "go-plus" {
-			detectedPlanTier = lower
-		}
-	}
-
 	usageEvents = append(usageEvents, allowanceEvent{
 		Timestamp:     now,
 		AuthID:        strings.TrimSpace(authID),
@@ -199,23 +191,17 @@ func commitOpenCodeStreamUsage(authID, model string, sample openCodeUsageSample)
 
 func resolveAllowanceCaps() (planLabel string, cap5h, capWeekly, capMonth float64) {
 	cfg := currentConfig()
-	usageMu.RLock()
-	plan := cfg.Plan
-	if plan == "" || plan == "auto" {
-		plan = detectedPlanTier
-	}
-	usageMu.RUnlock()
-
-	if strings.EqualFold(plan, "go") {
-		planLabel = "OpenCode Go ($10/mo)"
-		cap5h = defaultGoAllowance5h
-		capWeekly = defaultGoAllowanceWeekly
-		capMonth = defaultGoAllowanceMonth
-	} else {
+	plan := strings.ToLower(strings.TrimSpace(cfg.Plan))
+	if plan == "go-plus" {
 		planLabel = "OpenCode Go Plus ($40/mo)"
 		cap5h = defaultGoPlus5h
 		capWeekly = defaultGoPlusWeekly
 		capMonth = defaultGoPlusMonth
+	} else {
+		planLabel = "OpenCode Go ($10/mo)"
+		cap5h = defaultGoAllowance5h
+		capWeekly = defaultGoAllowanceWeekly
+		capMonth = defaultGoAllowanceMonth
 	}
 	if cfg.Allowance5h > 0 {
 		cap5h = cfg.Allowance5h
@@ -848,7 +834,7 @@ const statsHTMLTemplate = `<!doctype html>
 </main>
 <script>
 const STATS_API_URL = '/v0/management/plugins/opencode-go-oauth/stats';
-let data = { plan: 'OpenCode Go', used_5h_usd: 0, cap_5h_usd: 48, used_weekly_usd: 0, cap_weekly_usd: 120, used_monthly_usd: 0, cap_monthly_usd: 240, models: [] };
+let data = { plan: 'OpenCode Go ($10/mo)', used_5h_usd: 0, cap_5h_usd: 12, used_weekly_usd: 0, cap_weekly_usd: 30, used_monthly_usd: 0, cap_monthly_usd: 60, models: [] };
 
 function syncThemeWithCPA() {
   const apply = (mode) => {
@@ -956,9 +942,9 @@ function renderStats() {
   document.getElementById('totalReqCount').textContent = totalReqs.toLocaleString();
 
   document.getElementById('bucketCards').innerHTML =
-    renderBucket('5-Hour Rolling Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 48) +
-    renderBucket('Weekly Rolling Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 120) +
-    renderBucket('Monthly Rolling Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 240);
+    renderBucket('5-Hour Rolling Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 12) +
+    renderBucket('Weekly Rolling Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 30) +
+    renderBucket('Monthly Rolling Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 60);
 
   const tbody = document.getElementById('modelsBody');
   if (models.length === 0) {
