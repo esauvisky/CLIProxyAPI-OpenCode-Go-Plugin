@@ -27,7 +27,7 @@ jobs:
           path: CLIProxyAPI-OpenCode-Go-Plugin
       - uses: actions/checkout@v4
         with:
-          repository: esauvisky/CLIProxyAPI
+          repository: router-for-me/CLIProxyAPI
           path: CLIProxyAPI
       - uses: actions/setup-go@v5
         with:
