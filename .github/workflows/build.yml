@@ -27,7 +27,7 @@ jobs:
           path: CLIProxyAPI-OpenCode-Go-Plugin
       - uses: actions/checkout@v4
         with:
-          repository: router-for-me/CLIProxyAPI
+          repository: esauvisky/CLIProxyAPI
           path: CLIProxyAPI
       - uses: actions/setup-go@v5
         with:
@@ -36,7 +36,9 @@ jobs:
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
         env:
           GOTOOLCHAIN: auto
-        run: make test
+        run: |
+          go mod tidy
+          make test
       - name: Name release artifact
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
         run: cp build/opencode-go.so build/opencode-go-${{ matrix.artifact }}.so
