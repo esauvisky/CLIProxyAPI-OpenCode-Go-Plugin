@@ -72,9 +72,10 @@ import (
 
 const (
 	pluginID      = "opencode-go-oauth"
-	pluginVersion = "0.1.2"
+	pluginVersion = "0.1.3"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
+	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png"
 
 	defaultConsoleURL        = "https://opencode.ai/console"
 	defaultInferenceBaseURL  = "https://opencode.ai/inference/go"
@@ -200,6 +201,7 @@ func pluginRegistration() registration {
 			Version:          pluginVersion,
 			Author:           pluginAuthor,
 			GitHubRepository: pluginRepo,
+			Logo:             pluginLogo,
 			ConfigFields: []pluginapi.ConfigField{
 				{
 					Name:        "session_id",
