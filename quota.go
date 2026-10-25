@@ -601,55 +601,13 @@ func firstPositiveInt64(vals ...int64) int64 {
 }
 
 const statsHTMLTemplate = `<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenCode Go Stats</title>
 <style>
-  :root {
-    --bg-secondary: #faf9f5;
-    --bg-primary: #f0eee8;
-    --bg-tertiary: #e9e6df;
-    --bg-hover: #e9e6df;
-    --text-primary: #2d2a26;
-    --text-secondary: #6d6760;
-    --text-tertiary: #a29c95;
-    --border-color: #e3e1db;
-    --border-primary: #d5d2cb;
-    --border-hover: #cecac4;
-    --primary-color: #8b8680;
-    --primary-hover: #7f7a74;
-    --primary-active: #726d67;
-    --primary-contrast: #ffffff;
-    --success-color: #10b981;
-    --quota-medium-color: #e0aa14;
-    --warning-color: #c65746;
-    --error-color: #c65746;
-    --viz-success: #10b981;
-    --viz-failure: #c65746;
-    --success-badge-bg: #d1fae5;
-    --success-badge-text: #065f46;
-    --failure-badge-bg: rgba(198, 87, 70, 0.14);
-    --failure-badge-text: #8a3a30;
-    --count-badge-bg: rgba(139, 134, 128, 0.18);
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --radius-full: 9999px;
-  }
-
-  [data-theme='white'] {
-    --bg-secondary: #ffffff;
-    --bg-primary: #ffffff;
-    --bg-tertiary: #f6f6f6;
-    --bg-hover: #f6f6f6;
-    --border-color: #e5e5e5;
-    --border-primary: #d9d9d9;
-    --border-hover: #cccccc;
-  }
-
-  [data-theme='dark'] {
+  :root, [data-theme='dark'] {
     --bg-secondary: #151412;
     --bg-primary: #1d1b18;
     --bg-tertiary: #262320;
@@ -664,7 +622,10 @@ const statsHTMLTemplate = `<!doctype html>
     --primary-hover: #9a948e;
     --primary-active: #a6a099;
     --primary-contrast: #ffffff;
+    --success-color: #10b981;
     --quota-medium-color: #ffd862;
+    --warning-color: #c65746;
+    --error-color: #c65746;
     --viz-success: #0fae78;
     --viz-failure: #cf4b3a;
     --success-badge-bg: rgba(6, 78, 59, 0.3);
@@ -673,6 +634,61 @@ const statsHTMLTemplate = `<!doctype html>
     --failure-badge-text: #f1b0a6;
     --count-badge-bg: rgba(139, 134, 128, 0.28);
     --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.3);
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-full: 9999px;
+  }
+
+  [data-theme='light'] {
+    --bg-secondary: #faf9f5;
+    --bg-primary: #f0eee8;
+    --bg-tertiary: #e9e6df;
+    --bg-hover: #e9e6df;
+    --text-primary: #2d2a26;
+    --text-secondary: #6d6760;
+    --text-tertiary: #a29c95;
+    --border-color: #e3e1db;
+    --border-primary: #d5d2cb;
+    --border-hover: #cecac4;
+    --primary-color: #8b8680;
+    --primary-hover: #7f7a74;
+    --primary-active: #726d67;
+    --primary-contrast: #ffffff;
+    --quota-medium-color: #e0aa14;
+    --viz-success: #10b981;
+    --viz-failure: #c65746;
+    --success-badge-bg: #d1fae5;
+    --success-badge-text: #065f46;
+    --failure-badge-bg: rgba(198, 87, 70, 0.14);
+    --failure-badge-text: #8a3a30;
+    --count-badge-bg: rgba(139, 134, 128, 0.18);
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
+  [data-theme='white'] {
+    --bg-secondary: #ffffff;
+    --bg-primary: #ffffff;
+    --bg-tertiary: #f6f6f6;
+    --bg-hover: #f6f6f6;
+    --text-primary: #2d2a26;
+    --text-secondary: #6d6760;
+    --text-tertiary: #a29c95;
+    --border-color: #e5e5e5;
+    --border-primary: #d9d9d9;
+    --border-hover: #cccccc;
+    --primary-color: #8b8680;
+    --primary-hover: #7f7a74;
+    --primary-active: #726d67;
+    --primary-contrast: #ffffff;
+    --quota-medium-color: #e0aa14;
+    --viz-success: #10b981;
+    --viz-failure: #c65746;
+    --success-badge-bg: #d1fae5;
+    --success-badge-text: #065f46;
+    --failure-badge-bg: rgba(198, 87, 70, 0.14);
+    --failure-badge-text: #8a3a30;
+    --count-badge-bg: rgba(139, 134, 128, 0.18);
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 
   * { box-sizing: border-box; }
@@ -938,10 +954,11 @@ const statsHTMLTemplate = `<!doctype html>
         <span class="status-value" id="totalReqCount">0</span>
       </span>
     </div>
-    <div class="toolbar">
-      <button class="btn" onclick="loadStats()">Refresh</button>
-      <button class="btn btn-danger" onclick="resetStats()">Reset Counters</button>
-    </div>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn" onclick="loadStats()">Refresh</button>
+    <button class="btn btn-danger" onclick="resetStats()">Reset Counters</button>
   </div>
 
   <div class="cards" id="bucketCards"></div>
@@ -980,18 +997,25 @@ let data = { plan: 'OpenCode Go ($10/mo)', used_5h_usd: 0, cap_5h_usd: 12, used_
 
 function syncThemeWithCPA() {
   const apply = (mode) => {
-    if (mode === 'dark') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else if (mode === 'white') {
+    if (mode === 'white') {
       document.documentElement.setAttribute('data-theme', 'white');
+    } else if (mode === 'light') {
+      document.documentElement.setAttribute('data-theme', 'light');
     } else {
-      document.documentElement.removeAttribute('data-theme');
+      document.documentElement.setAttribute('data-theme', 'dark');
     }
   };
   try {
     if (window.parent && window.parent !== window && window.parent.document) {
       const parentDoc = window.parent.document.documentElement;
-      const syncFromParent = () => apply(parentDoc.getAttribute('data-theme'));
+      const syncFromParent = () => {
+        const attr = parentDoc.getAttribute('data-theme');
+        if (attr === 'dark' || attr === 'white') {
+          apply(attr);
+        } else {
+          apply('light');
+        }
+      };
       syncFromParent();
       new MutationObserver(syncFromParent).observe(parentDoc, { attributes: true, attributeFilter: ['data-theme'] });
       return;
@@ -1002,15 +1026,22 @@ function syncThemeWithCPA() {
     if (raw) {
       const parsed = JSON.parse(raw);
       const t = parsed?.state?.theme;
-      if (t === 'dark' || t === 'white' || t === 'light') {
-        apply(t);
+      const resolved = parsed?.state?.resolvedTheme;
+      if (t === 'dark' || (t === 'auto' && resolved === 'dark')) {
+        apply('dark');
+        return;
+      }
+      if (t === 'white' || (t === 'auto' && resolved !== 'dark')) {
+        apply('white');
+        return;
+      }
+      if (t === 'light') {
+        apply('light');
         return;
       }
     }
   } catch (_) {}
-  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    apply('dark');
-  }
+  apply(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 }
 
 function deobfuscateCPASecret(payload) {
