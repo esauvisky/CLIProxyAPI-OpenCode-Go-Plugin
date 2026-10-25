@@ -101,7 +101,7 @@ func parseStoredCredential(rawJSON []byte) (storedCredential, bool) {
 		return storedCredential{}, false
 	}
 	rawType := strings.ToLower(strings.TrimSpace(stringFromMap(raw, "type", "provider")))
-	isOpenCodeType := rawType == pluginID || rawType == "opencode_go"
+	isOpenCodeType := rawType == pluginID || rawType == "opencode-go" || rawType == "opencode_go"
 	if !isOpenCodeType {
 		// Also accept OpenCode CLI's native credential shape if server points to opencode.ai/console
 		if meta, ok := raw["metadata"].(map[string]any); ok {

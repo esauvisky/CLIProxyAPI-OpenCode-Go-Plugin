@@ -82,8 +82,8 @@ int main(int argc, char **argv) {
 	require_contains(&plugin, "plugin.register", NULL, "model_provider");
 	require_contains(&plugin, "plugin.register", NULL, "executor");
 	require_contains(&plugin, "plugin.register", NULL, "quota_provider");
-	require_contains(&plugin, "auth.identifier", NULL, "opencode-go");
-	require_contains(&plugin, "executor.identifier", NULL, "opencode-go");
+	require_contains(&plugin, "auth.identifier", NULL, "opencode-go-oauth");
+	require_contains(&plugin, "executor.identifier", NULL, "opencode-go-oauth");
 	require_contains(&plugin, "model.static", "{}", "gemini-4-argon");
 	require_contains(&plugin, "model.static", "{}", "gpt-6-luna");
 	require_contains(&plugin, "model.static", "{}", "qwen3.8-max");

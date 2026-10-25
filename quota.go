@@ -18,7 +18,7 @@ import (
 
 const (
 	statsResourcePath   = "/stats"
-	mgmtStatsRoutePath  = "/plugins/opencode-go/stats"
+	mgmtStatsRoutePath  = "/plugins/opencode-go-oauth/stats"
 	rolling5hWindow     = 5 * time.Hour
 	rollingWeeklyWindow = 7 * 24 * time.Hour
 	rollingMonthWindow  = 30 * 24 * time.Hour

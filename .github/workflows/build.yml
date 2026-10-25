@@ -41,7 +41,7 @@ jobs:
           make test
       - name: Name release artifact
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
-        run: cp build/opencode-go.so build/opencode-go-${{ matrix.artifact }}.so
+        run: cp build/opencode-go-oauth.so build/opencode-go-oauth-${{ matrix.artifact }}.so
       - name: Package Plugin Store archive
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
@@ -49,14 +49,14 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           version="${RELEASE_VERSION#v}"
-          archive="opencode-go_${version}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
-          (cd build && zip "$archive" opencode-go.so)
+          archive="opencode-go-oauth_${version}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
+          (cd build && zip "$archive" opencode-go-oauth.so)
       - uses: actions/upload-artifact@v4
         with:
-          name: opencode-go-${{ matrix.artifact }}
+          name: opencode-go-oauth-${{ matrix.artifact }}
           path: |
-            CLIProxyAPI-OpenCode-Go-Plugin/build/opencode-go-${{ matrix.artifact }}.so
-            CLIProxyAPI-OpenCode-Go-Plugin/build/opencode-go_*.zip
+            CLIProxyAPI-OpenCode-Go-Plugin/build/opencode-go-oauth-${{ matrix.artifact }}.so
+            CLIProxyAPI-OpenCode-Go-Plugin/build/opencode-go-oauth_*.zip
           if-no-files-found: error
 
   release:
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: opencode-go-*
+          pattern: opencode-go-oauth-*
           path: artifacts
           merge-multiple: true
       - name: Publish release
@@ -76,11 +76,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd artifacts
-          sha256sum opencode-go_*.zip > checksums.txt
+          sha256sum opencode-go-oauth_*.zip > checksums.txt
           gh release create "$GITHUB_REF_NAME" \
-            opencode-go-linux-amd64.so \
-            opencode-go-linux-arm64.so \
-            opencode-go_*.zip \
+            opencode-go-oauth-linux-amd64.so \
+            opencode-go-oauth-linux-arm64.so \
+            opencode-go-oauth_*.zip \
             checksums.txt \
             --repo "$GITHUB_REPOSITORY" \
             --generate-notes
