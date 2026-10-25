@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go",
+      "description": "Adds OpenCode Go / Go Plus OAuth device login, full 44-model catalog across Chat Completions, Responses, Anthropic Messages, and Gemini protocols, and per-model allowance usage tracking.",
+      "author": "esauvisky",
+      "version": "0.1.0",
+      "repository": "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin",
+      "homepage": "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin",
+      "license": "MIT",
+      "tags": ["opencode", "oauth", "executor", "quota", "model"]
+    }
+  ]
+}
