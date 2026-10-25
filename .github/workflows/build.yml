@@ -31,9 +31,11 @@ jobs:
           path: CLIProxyAPI
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
+          go-version-file: CLIProxyAPI/go.mod
       - name: Build and test
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
+        env:
+          GOTOOLCHAIN: auto
         run: make test
       - name: Name release artifact
         working-directory: CLIProxyAPI-OpenCode-Go-Plugin
