@@ -287,7 +287,7 @@ func computeWindowTotals(authID string, now time.Time) (used5h, used7d, used30d 
 
 func handleQuotaDescribe(_ []byte) ([]byte, error) {
 	return okEnvelope(pluginapi.QuotaDescribeResponse{
-		SupportedProviders: []string{pluginID},
+		SupportedProviders: []string{providerID, pluginID},
 		DisplayName:        "OpenCode Go Allowance",
 		SupportsReset:      true,
 	})

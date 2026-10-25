@@ -72,7 +72,9 @@ import (
 
 const (
 	pluginID      = "opencode-go-oauth"
-	pluginVersion = "0.1.3"
+	providerID    = "opencode-go"
+	pluginName    = "OpenCode Go"
+	pluginVersion = "0.1.4"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png"
@@ -197,7 +199,7 @@ func pluginRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             pluginID,
+			Name:             pluginName,
 			Version:          pluginVersion,
 			Author:           pluginAuthor,
 			GitHubRepository: pluginRepo,
@@ -296,7 +298,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(struct{}{})
 
 	case pluginabi.MethodAuthIdentifier:
-		return okEnvelope(map[string]string{"identifier": pluginID})
+		return okEnvelope(map[string]string{"identifier": providerID})
 	case pluginabi.MethodAuthParse:
 		return handleAuthParse(request)
 	case pluginabi.MethodAuthLoginStart:
@@ -312,7 +314,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleModelForAuth(request)
 
 	case pluginabi.MethodExecutorIdentifier:
-		return okEnvelope(map[string]string{"identifier": pluginID})
+		return okEnvelope(map[string]string{"identifier": providerID})
 	case pluginabi.MethodExecutorExecute:
 		return handleExecutorExecute(request)
 	case pluginabi.MethodExecutorExecuteStream:
@@ -323,7 +325,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleExecutorHTTPRequest(request)
 
 	case pluginabi.MethodQuotaIdentifier:
-		return okEnvelope(map[string]string{"identifier": pluginID})
+		return okEnvelope(map[string]string{"identifier": providerID})
 	case pluginabi.MethodQuotaDescribe:
 		return handleQuotaDescribe(request)
 	case pluginabi.MethodQuotaFetch:

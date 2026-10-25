@@ -118,7 +118,7 @@ func parseStoredCredential(rawJSON []byte) (storedCredential, bool) {
 	}
 
 	cred := storedCredential{
-		Type:         pluginID,
+		Type:         providerID,
 		AccessToken:  firstNonEmpty(stringFromMap(raw, "access_token", "access")),
 		RefreshToken: firstNonEmpty(stringFromMap(raw, "refresh_token", "refresh")),
 		APIKey:       firstNonEmpty(stringFromMap(raw, "api_key", "key")),
@@ -149,7 +149,7 @@ func parseStoredCredential(rawJSON []byte) (storedCredential, bool) {
 }
 
 func buildAuthDataFromCredential(cred storedCredential, fileName, path string) pluginapi.AuthData {
-	cred.Type = pluginID
+	cred.Type = providerID
 	if cred.ConsoleURL == "" {
 		cred.ConsoleURL = currentConfig().ConsoleURL
 	}
@@ -170,7 +170,7 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 	}
 
 	storageMap := map[string]any{
-		"type":          pluginID,
+		"type":          providerID,
 		"access_token":  cred.AccessToken,
 		"refresh_token": cred.RefreshToken,
 		"api_key":       cred.APIKey,
@@ -210,7 +210,7 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 	attrs["header:x-opencode-session"] = currentConfig().SessionID
 
 	meta := map[string]any{
-		"type":       pluginID,
+		"type":       providerID,
 		"email":      cred.Email,
 		"project_id": cred.OrgID,
 		"account":    cred.OrgName,
@@ -220,7 +220,7 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 	}
 
 	return pluginapi.AuthData{
-		Provider:         pluginID,
+		Provider:         providerID,
 		ID:               id,
 		FileName:         fileName,
 		Label:            label,
@@ -283,7 +283,7 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 		expiresIn = 600
 	}
 	return okEnvelope(pluginapi.AuthLoginStartResponse{
-		Provider:  pluginID,
+		Provider:  providerID,
 		URL:       verifyURL,
 		State:     stateKey,
 		ExpiresAt: time.Now().UTC().Add(time.Duration(expiresIn) * time.Second),
@@ -555,10 +555,8 @@ func sanitizeFileNamePart(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	var b strings.Builder
 	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == '@' {
 			b.WriteRune(r)
-		} else if r == '@' {
-			b.WriteRune('-')
 		}
 	}
 	out := strings.Trim(b.String(), "-_.")

@@ -156,7 +156,7 @@ func inferModelSpec(modelID string) goModelSpec {
 
 func handleModelStatic(_ []byte) ([]byte, error) {
 	return okEnvelope(pluginapi.ModelResponse{
-		Provider: pluginID,
+		Provider: providerID,
 		Models:   currentCatalogModelInfos(),
 	})
 }
@@ -168,7 +168,7 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 	}
 	refreshCatalogFromUpstream(req.HostCallbackID)
 	return okEnvelope(pluginapi.ModelResponse{
-		Provider: pluginID,
+		Provider: providerID,
 		Models:   currentCatalogModelInfos(),
 	})
 }
@@ -352,7 +352,7 @@ func currentCatalogModelInfos() []pluginapi.ModelInfo {
 			ID:                        spec.ID,
 			Object:                    "model",
 			Created:                   created,
-			OwnedBy:                   pluginID,
+			OwnedBy:                   providerID,
 			Type:                      string(spec.Protocol),
 			DisplayName:               firstNonEmpty(spec.DisplayName, spec.ID),
 			Name:                      spec.ID,
