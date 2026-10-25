@@ -75,6 +75,8 @@ type storedCredential struct {
 	Email        string `json:"email,omitempty"`
 	OrgID        string `json:"org_id,omitempty"`
 	OrgName      string `json:"org_name,omitempty"`
+	Plan         string `json:"plan,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
 
 func handleAuthParse(raw []byte) ([]byte, error) {
@@ -127,6 +129,8 @@ func parseStoredCredential(rawJSON []byte) (storedCredential, bool) {
 		Email:        stringFromMap(raw, "email"),
 		OrgID:        stringFromMap(raw, "org_id", "orgID", "project_id"),
 		OrgName:      stringFromMap(raw, "org_name", "orgName"),
+		Plan:         normalizePlanTier(stringFromMap(raw, "plan", "plan_type")),
+		Note:         stringFromMap(raw, "note"),
 	}
 	if meta, ok := raw["metadata"].(map[string]any); ok {
 		cred.ConsoleURL = firstNonEmpty(stringFromMap(meta, "server"), cred.ConsoleURL)
@@ -181,6 +185,12 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 		"org_id":        cred.OrgID,
 		"org_name":      cred.OrgName,
 	}
+	if cred.Plan != "" {
+		storageMap["plan"] = cred.Plan
+	}
+	if cred.Note != "" {
+		storageMap["note"] = cred.Note
+	}
 	var nextRefresh time.Time
 	if cred.ExpiresAtMs > 0 {
 		expTime := time.UnixMilli(cred.ExpiresAtMs).UTC()
@@ -207,6 +217,9 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 	if cred.Email != "" {
 		attrs["email"] = cred.Email
 	}
+	if cred.Plan != "" {
+		attrs["plan_type"] = cred.Plan
+	}
 	attrs["header:x-opencode-session"] = currentConfig().SessionID
 
 	meta := map[string]any{
@@ -214,6 +227,9 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 		"email":      cred.Email,
 		"project_id": cred.OrgID,
 		"account":    cred.OrgName,
+	}
+	if cred.Plan != "" {
+		meta["plan"] = cred.Plan
 	}
 	if cred.ExpiresAtMs > 0 {
 		meta["expired"] = time.UnixMilli(cred.ExpiresAtMs).UTC().Format(time.RFC3339)
@@ -444,12 +460,14 @@ func completeOAuthCredential(hostCallbackID, consoleURL string, tokenResp device
 		selectedOrg = orgs[0]
 	}
 
+	detectedPlan := probeAccountPlanTier(hostCallbackID, tokenResp.AccessToken, selectedOrg.ID)
+
 	expiresIn := tokenResp.ExpiresIn
 	if expiresIn <= 0 {
 		expiresIn = 2592000
 	}
 	return storedCredential{
-		Type:         pluginID,
+		Type:         providerID,
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAtMs:  time.Now().UTC().Add(time.Duration(expiresIn) * time.Second).UnixMilli(),
@@ -458,6 +476,7 @@ func completeOAuthCredential(hostCallbackID, consoleURL string, tokenResp device
 		Email:        user.Email,
 		OrgID:        selectedOrg.ID,
 		OrgName:      selectedOrg.Name,
+		Plan:         detectedPlan,
 	}, nil
 }
 

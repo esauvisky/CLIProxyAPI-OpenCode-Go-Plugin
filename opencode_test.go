@@ -42,6 +42,11 @@ func TestDeviceOAuthFlowAndCredentialParse(t *testing.T) {
 				StatusCode: http.StatusOK,
 				Body:       []byte(`[{"id":"org_123","name":"Personal"}]`),
 			})
+		case strings.HasSuffix(targetURL, "/openai/v1/chat/completions"):
+			return marshalJSONNoEscape(pluginapi.HTTPResponse{
+				StatusCode: http.StatusOK,
+				Body:       []byte(`{"usage":{"opencode":{"billing_source":"go"}}}`),
+			})
 		default:
 			t.Fatalf("unexpected URL: %s", targetURL)
 			return nil, nil

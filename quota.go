@@ -71,7 +71,48 @@ var (
 	usageMu            sync.RWMutex
 	usageEvents        []allowanceEvent
 	usageTotalsByModel = make(map[string]*perModelUsageSummary)
+	planByAuthID       = make(map[string]string)
 )
+
+type rpcQuotaFetchRequest struct {
+	pluginapi.QuotaFetchRequest
+	HostCallbackID string `json:"host_callback_id,omitempty"`
+}
+
+func normalizePlanTier(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch {
+	case s == "go-plus" || s == "goplus" || s == "plus" || strings.Contains(s, "go-plus") || strings.Contains(s, "go plus") || strings.Contains(s, "$40") || s == "40":
+		return "go-plus"
+	case s == "go" || strings.Contains(s, "$10") || s == "10":
+		return "go"
+	default:
+		return ""
+	}
+}
+
+func probeAccountPlanTier(hostCallbackID, token, orgID string) string {
+	if strings.TrimSpace(hostCallbackID) == "" || strings.TrimSpace(token) == "" {
+		return ""
+	}
+	cfg := currentConfig()
+	headers := http.Header{
+		"Authorization":      []string{"Bearer " + strings.TrimSpace(token)},
+		"Content-Type":       []string{"application/json"},
+		"Accept":             []string{"application/json"},
+		"User-Agent":         []string{cfg.UserAgent},
+		"x-opencode-session": []string{cfg.SessionID},
+	}
+	if strings.TrimSpace(orgID) != "" {
+		headers.Set("x-opencode-org-id", strings.TrimSpace(orgID))
+	}
+	body := []byte(`{"model":"beam-free","messages":[{"role":"user","content":"hi"}],"max_tokens":1,"stream":false}`)
+	resp, errHTTP := doHostHTTP(hostCallbackID, http.MethodPost, cfg.InferenceBaseURL+"/openai/v1/chat/completions", headers, body)
+	if errHTTP != nil || resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	return normalizePlanTier(gjson.GetBytes(resp.Body, "usage.opencode.billing_source").String())
+}
 
 func parseOpenCodeUsageNode(u gjson.Result) (openCodeUsageSample, bool) {
 	if !u.Exists() {
@@ -152,6 +193,10 @@ func commitOpenCodeStreamUsage(authID, model string, sample openCodeUsageSample)
 	usageMu.Lock()
 	defer usageMu.Unlock()
 
+	if tier := normalizePlanTier(sample.BillingSource); tier != "" && strings.TrimSpace(authID) != "" {
+		planByAuthID[strings.TrimSpace(authID)] = tier
+	}
+
 	usageEvents = append(usageEvents, allowanceEvent{
 		Timestamp:     now,
 		AuthID:        strings.TrimSpace(authID),
@@ -189,10 +234,9 @@ func commitOpenCodeStreamUsage(authID, model string, sample openCodeUsageSample)
 	}
 }
 
-func resolveAllowanceCaps() (planLabel string, cap5h, capWeekly, capMonth float64) {
+func resolveAllowanceCapsForPlan(plan string) (planLabel string, cap5h, capWeekly, capMonth float64) {
 	cfg := currentConfig()
-	plan := strings.ToLower(strings.TrimSpace(cfg.Plan))
-	if plan == "go-plus" {
+	if normalizePlanTier(plan) == "go-plus" {
 		planLabel = "OpenCode Go Plus ($40/mo)"
 		cap5h = defaultGoPlus5h
 		capWeekly = defaultGoPlusWeekly
@@ -213,6 +257,67 @@ func resolveAllowanceCaps() (planLabel string, cap5h, capWeekly, capMonth float6
 		capMonth = cfg.AllowanceMonthly
 	}
 	return planLabel, cap5h, capWeekly, capMonth
+}
+
+func resolveAllowanceCaps() (planLabel string, cap5h, capWeekly, capMonth float64) {
+	return resolveAllowanceCapsForPlan(currentConfig().Plan)
+}
+
+func extractPlanOverrideFromAuth(req rpcQuotaFetchRequest) string {
+	if req.Attributes != nil {
+		for _, k := range []string{"header:x-opencode-plan", "plan", "plan_type", "note"} {
+			if tier := normalizePlanTier(req.Attributes[k]); tier != "" {
+				return tier
+			}
+		}
+	}
+	if req.Metadata != nil {
+		for _, k := range []string{"note", "plan", "plan_type"} {
+			if tier := normalizePlanTier(stringFromMap(req.Metadata, k)); tier != "" {
+				return tier
+			}
+		}
+		if hdrs, ok := req.Metadata["headers"].(map[string]any); ok {
+			if tier := normalizePlanTier(stringFromMap(hdrs, "x-opencode-plan", "X-Opencode-Plan")); tier != "" {
+				return tier
+			}
+		}
+	}
+	if len(req.StorageJSON) > 0 {
+		for _, path := range []string{"note", "plan", "plan_type", "headers.x-opencode-plan", "headers.X-Opencode-Plan"} {
+			if tier := normalizePlanTier(gjson.GetBytes(req.StorageJSON, path).String()); tier != "" {
+				return tier
+			}
+		}
+	}
+	return ""
+}
+
+func resolveAllowanceCapsForAuth(req rpcQuotaFetchRequest) (planLabel string, cap5h, capWeekly, capMonth float64) {
+	// 1. Explicit per-credential override in Auth File Details / Edit (Note, Headers x-opencode-plan, or plan field in JSON)
+	if override := extractPlanOverrideFromAuth(req); override != "" {
+		return resolveAllowanceCapsForPlan(override)
+	}
+	authID := strings.TrimSpace(req.AuthID)
+	if authID != "" {
+		usageMu.RLock()
+		cached := planByAuthID[authID]
+		usageMu.RUnlock()
+		if cached != "" {
+			return resolveAllowanceCapsForPlan(cached)
+		}
+	}
+	// 2. Live $0.00 probe on beam-free for this specific credential
+	token, orgID := extractAuthCredentials(req.StorageJSON, req.Attributes)
+	if probed := probeAccountPlanTier(req.HostCallbackID, token, orgID); probed != "" {
+		if authID != "" {
+			usageMu.Lock()
+			planByAuthID[authID] = probed
+			usageMu.Unlock()
+		}
+		return resolveAllowanceCapsForPlan(probed)
+	}
+	return resolveAllowanceCaps()
 }
 
 func computeWindowTotals(authID string, now time.Time) (used5h, used7d, used30d float64, oldest5h, oldest7d, oldest30d time.Time, perModel []perModelUsageSummary) {
@@ -280,14 +385,14 @@ func handleQuotaDescribe(_ []byte) ([]byte, error) {
 }
 
 func handleQuotaFetch(raw []byte) ([]byte, error) {
-	var req pluginapi.QuotaFetchRequest
+	var req rpcQuotaFetchRequest
 	if len(raw) > 0 {
 		if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 			return nil, errUnmarshal
 		}
 	}
 	now := time.Now().UTC()
-	planLabel, cap5h, cap7d, cap30d := resolveAllowanceCaps()
+	planLabel, cap5h, cap7d, cap30d := resolveAllowanceCapsForAuth(req)
 	used5h, used7d, used30d, oldest5h, oldest7d, oldest30d, _ := computeWindowTotals(req.AuthID, now)
 
 	makeBucket := func(window string, used, capVal float64, oldest time.Time, dur time.Duration) pluginapi.QuotaBucket {
