@@ -508,6 +508,43 @@ func managementRegistrationPayload() managementRegistration {
 	}
 }
 
+func resolveStatsPageAllowanceCaps() (planLabel string, cap5h, capWeekly, capMonth float64) {
+	usageMu.RLock()
+	goCount := 0
+	plusCount := 0
+	for _, tier := range planByAuthID {
+		switch normalizePlanTier(tier) {
+		case "go-plus":
+			plusCount++
+		case "go":
+			goCount++
+		}
+	}
+	usageMu.RUnlock()
+
+	if goCount == 0 && plusCount == 0 {
+		return resolveAllowanceCaps()
+	}
+	if goCount == 1 && plusCount == 0 {
+		return resolveAllowanceCapsForPlan("go")
+	}
+	if plusCount == 1 && goCount == 0 {
+		return resolveAllowanceCapsForPlan("go-plus")
+	}
+	cap5h = float64(goCount)*defaultGoAllowance5h + float64(plusCount)*defaultGoPlus5h
+	capWeekly = float64(goCount)*defaultGoAllowanceWeekly + float64(plusCount)*defaultGoPlusWeekly
+	capMonth = float64(goCount)*defaultGoAllowanceMonth + float64(plusCount)*defaultGoPlusMonth
+	switch {
+	case goCount > 0 && plusCount > 0:
+		planLabel = fmt.Sprintf("%d× Go + %d× Go Plus", goCount, plusCount)
+	case plusCount > 1:
+		planLabel = fmt.Sprintf("%d× OpenCode Go Plus", plusCount)
+	default:
+		planLabel = fmt.Sprintf("%d× OpenCode Go", goCount)
+	}
+	return planLabel, cap5h, capWeekly, capMonth
+}
+
 func handleManagement(raw []byte) ([]byte, error) {
 	var req managementRequest
 	if len(raw) > 0 {
@@ -519,7 +556,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 			_, _ = handleQuotaReset(nil)
 		}
 		now := time.Now().UTC()
-		planLabel, cap5h, cap7d, cap30d := resolveAllowanceCaps()
+		planLabel, cap5h, cap7d, cap30d := resolveStatsPageAllowanceCaps()
 		used5h, used7d, used30d, _, _, _, models := computeWindowTotals("", now)
 
 		payload := map[string]any{

@@ -167,9 +167,30 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		return nil, errUnmarshal
 	}
 	refreshCatalogFromUpstream(req.HostCallbackID)
+
+	var authUpdate pluginapi.AuthData
+	if cred, okParse := parseStoredCredential(req.StorageJSON); okParse {
+		plan := firstNonEmpty(normalizePlanTier(cred.Note), cred.Plan)
+		if plan == "" {
+			token := firstNonEmpty(cred.AccessToken, cred.APIKey)
+			if probed := probeAccountPlanTier(req.HostCallbackID, token, cred.OrgID); probed != "" {
+				plan = probed
+				cred.Plan = probed
+				authUpdate = buildAuthDataFromCredential(cred, req.AuthID, "")
+				authUpdate.ID = req.AuthID
+			}
+		}
+		if plan != "" && strings.TrimSpace(req.AuthID) != "" {
+			usageMu.Lock()
+			planByAuthID[strings.TrimSpace(req.AuthID)] = plan
+			usageMu.Unlock()
+		}
+	}
+
 	return okEnvelope(pluginapi.ModelResponse{
-		Provider: providerID,
-		Models:   currentCatalogModelInfos(),
+		Provider:   providerID,
+		Models:     currentCatalogModelInfos(),
+		AuthUpdate: authUpdate,
 	})
 }
 
