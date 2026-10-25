@@ -72,7 +72,7 @@ import (
 
 const (
 	pluginID      = "opencode-go-oauth"
-	pluginVersion = "0.1.1"
+	pluginVersion = "0.1.2"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
 

@@ -2,17 +2,19 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
+
+var pendingLoginStates sync.Map
 
 type rpcAuthLoginStartRequest struct {
 	pluginapi.AuthLoginStartRequest
@@ -269,12 +271,12 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 		verifyURL = origin + verifyURL
 	}
 
-	stateBytes, _ := marshalJSONNoEscape(loginStatePayload{
+	stateKey := sanitizeOAuthState(codeResp.DeviceCode, codeResp.UserCode)
+	pendingLoginStates.Store(stateKey, loginStatePayload{
 		ConsoleURL: consoleURL,
 		DeviceCode: codeResp.DeviceCode,
 		UserCode:   codeResp.UserCode,
 	})
-	encodedState := base64.RawURLEncoding.EncodeToString(stateBytes)
 
 	expiresIn := codeResp.ExpiresIn
 	if expiresIn <= 0 {
@@ -283,13 +285,36 @@ func handleAuthLoginStart(raw []byte) ([]byte, error) {
 	return okEnvelope(pluginapi.AuthLoginStartResponse{
 		Provider:  pluginID,
 		URL:       verifyURL,
-		State:     encodedState,
+		State:     stateKey,
 		ExpiresAt: time.Now().UTC().Add(time.Duration(expiresIn) * time.Second),
 		Metadata: map[string]any{
-			"user_code": codeResp.UserCode,
-			"interval":  codeResp.Interval,
+			"device_code": codeResp.DeviceCode,
+			"user_code":   codeResp.UserCode,
+			"console_url": consoleURL,
+			"interval":    codeResp.Interval,
 		},
 	})
+}
+
+func sanitizeOAuthState(deviceCode, userCode string) string {
+	raw := strings.TrimSpace(deviceCode)
+	if raw == "" {
+		raw = "oc-" + strings.TrimSpace(userCode)
+	}
+	var b strings.Builder
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if len(out) > 96 {
+		out = out[:96]
+	}
+	if out == "" {
+		out = fmt.Sprintf("oc-%d", time.Now().UnixNano())
+	}
+	return out
 }
 
 func handleAuthLoginPoll(raw []byte) ([]byte, error) {
@@ -297,18 +322,25 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	stateRaw, errDecode := base64.RawURLEncoding.DecodeString(strings.TrimSpace(req.State))
-	if errDecode != nil {
+	stateKey := strings.TrimSpace(req.State)
+	var state loginStatePayload
+	if loaded, ok := pendingLoginStates.Load(stateKey); ok {
+		if typed, okTyped := loaded.(loginStatePayload); okTyped {
+			state = typed
+		}
+	}
+	if state.DeviceCode == "" && req.Metadata != nil {
+		state.DeviceCode = stringFromMap(req.Metadata, "device_code")
+		state.UserCode = stringFromMap(req.Metadata, "user_code")
+		state.ConsoleURL = stringFromMap(req.Metadata, "console_url")
+	}
+	if state.DeviceCode == "" {
+		state.DeviceCode = stateKey
+	}
+	if state.DeviceCode == "" {
 		return okEnvelope(pluginapi.AuthLoginPollResponse{
 			Status:  pluginapi.AuthLoginStatusError,
 			Message: "invalid login state",
-		})
-	}
-	var state loginStatePayload
-	if errUnmarshal := json.Unmarshal(stateRaw, &state); errUnmarshal != nil || state.DeviceCode == "" {
-		return okEnvelope(pluginapi.AuthLoginPollResponse{
-			Status:  pluginapi.AuthLoginStatusError,
-			Message: "corrupted login state",
 		})
 	}
 
@@ -365,6 +397,7 @@ func handleAuthLoginPoll(raw []byte) ([]byte, error) {
 			Message: errComplete.Error(),
 		})
 	}
+	pendingLoginStates.Delete(stateKey)
 	authData := buildAuthDataFromCredential(cred, "", "")
 	return okEnvelope(pluginapi.AuthLoginPollResponse{
 		Status:  pluginapi.AuthLoginStatusSuccess,
