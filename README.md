@@ -2,12 +2,10 @@
 
 This ABI v1 plugin adds **OpenCode Go / Go Plus** (`opencode-go`) support to CLIProxyAPI, including:
 - **OAuth Device Login**: Sign in directly from the CLIProxyAPI Management Console via `https://opencode.ai/console/auth/device/code` (or upload a JSON credential with `api_key` / `access_token`). Automatically refreshes tokens and attaches `x-opencode-org-id` and `x-opencode-session` (`cpa-main` by default).
-- **Full 44-Model Multi-Protocol Catalog**: Dynamically merges live `/inference/go/v1/models` and `models.opencode.ai/api.json` metadata and routes each model to its native upstream wire protocol (`sdk/translator/builtin` handles cross-protocol client translation):
-  - **OpenAI Chat Completions** (`/inference/go/openai/v1/chat/completions`): `glm-5.3`, `glm-5.3-flash`, `glm-5.2`, `glm-5.1`, `kimi-k3.1-pro`, `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `mimo-v2.6-pro`, `mimo-v2.6-flash`, `mimo-v2.5-pro`, `mimo-v2.5`, `minimax-m3.1-flash`, `minimax-m2.5`, `longcat-2.0`, `hy4-preview`, `hy3`, `step-5-preview`, `omen-alpha`, `beam-free`, `cat-jam-free`, `iceman-contributor-free`, `longcat-2.5-preview-free`, `minimax-m3.1-flash-free`, `space-bunny`, `step-5-preview-free`
-  - **OpenAI Responses** (`/inference/go/openai/v1/responses`): `gpt-6-luna`, `gpt-5.6-luna`, `grok-4.7`, `grok-4.6`, `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`
-  - **Anthropic Messages** (`/inference/go/anthropic/v1/messages`): `claude-haiku-5-5`, `minimax-m3`, `minimax-m2.7`, `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-plus`
-  - **Google Gemini** (`/inference/go/google/v1beta/models/<model>:generateContent`): `gemini-4-argon`, `gemini-4-argon-contributor`
-- **Quota & Per-Model Allowance Telemetry**: Extracts `usage.opencode` (`billing_source`, `list_cost`, `allowance`, token breakdown) from every response, exposes 5-hour / weekly / monthly rolling buckets via `QuotaProvider`, and serves a live per-model breakdown dashboard at **Plugins > OpenCode Go Stats** (`/v0/resource/plugins/opencode-go/stats`).
+- **Model catalog**: Uses the live OpenCode Go `/inference/go/v1/models` list and enriches it with metadata from `models.opencode.ai`. A verified snapshot is used at startup until a live refresh succeeds; the last successful list is retained if a refresh fails. The live list is not a definitive test of every model that may accept requests: verified models omitted from it can be added with `extra_models`.
+- **Quota & usage**: Reads each credential's 5-hour, weekly, and monthly meters from OpenCode. The dashboard displays upstream percentages and reset times, and labels per-model request telemetry as local to the current CPA process. The CPA quota card includes actual dollar amounts when the Console status endpoint returns them; if it does not, it falls back to percentage-only usage. These upstream endpoints are not documented as a stable public API.
+- **Localized dashboard**: The plugin resource page follows the CPA language setting. To load account data inside the resource page, the management key must be available to the page (for example, by using CPA's “Remember password” option); otherwise it displays an error instead of fabricated zero usage.
+
 
 ## Build
 
@@ -38,5 +36,8 @@ plugins:
       enabled: true
       priority: 10
       session_id: "cpa-main"
-      plan: "auto" # "auto", "go", or "go-plus"
+      # Optional: models you have verified work upstream but are absent from its list.
+      # Map each model ID to its upstream protocol: openai, openai-response, claude, or gemini.
+      extra_models: {}
+      # Example: extra_models: {"verified-model-id": "openai"}
 ```

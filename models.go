@@ -94,9 +94,13 @@ func ensureCatalogInitializedLocked() {
 	if catalogInitialized {
 		return
 	}
-	catalogByID = make(map[string]goModelSpec, len(builtinGoCatalog))
+	catalogByID = make(map[string]goModelSpec)
+	// Snapshot from the live upstream list; refreshed once a credential is available.
+	verified := map[string]bool{"beam-free": true, "claude-haiku-5-5": true, "deepseek-v4-pro": true, "deepseek-v4.1-flash": true, "gemini-4-argon": true, "glm-5.1": true, "glm-5.2": true, "glm-5.3": true, "glm-5.3-flash": true, "gpt-5.6-luna": true, "gpt-6-luna": true, "grok-4.6": true, "grok-4.7": true, "hy3": true, "hy4-preview": true, "iceman-contributor-free": true, "kimi-k2.6": true, "kimi-k2.7-code": true, "kimi-k3": true, "kimi-k3.1-pro": true, "longcat-2.0": true, "mimo-v2.5": true, "mimo-v2.5-pro": true, "mimo-v2.6-flash": true, "mimo-v2.6-pro": true, "minimax-m2.5": true, "minimax-m2.7": true, "minimax-m3": true, "minimax-m3.1-flash": true, "muse-spark-1.2-contributor": true, "muse-spark-1.3-contributor": true, "omen-alpha": true, "qwen3.6-plus": true, "qwen3.7-max": true, "qwen3.7-plus": true, "qwen3.8-flash": true, "qwen3.8-max": true, "step-5-preview": true}
 	for _, spec := range builtinGoCatalog {
-		catalogByID[spec.ID] = spec
+		if verified[spec.ID] {
+			catalogByID[spec.ID] = spec
+		}
 	}
 	catalogInitialized = true
 }
@@ -127,6 +131,14 @@ func lookupModelSpec(modelID string) goModelSpec {
 	spec, ok := catalogByID[baseID]
 	catalogMu.Unlock()
 	if ok {
+		return spec
+	}
+	if protocol, ok := currentConfig().ExtraModels[baseID]; ok {
+		spec := inferModelSpec(baseID)
+		switch wireProtocol(strings.TrimSpace(protocol)) {
+		case wireProtocolChatCompletions, wireProtocolResponses, wireProtocolAnthropic, wireProtocolGemini:
+			spec.Protocol = wireProtocol(strings.TrimSpace(protocol))
+		}
 		return spec
 	}
 	return inferModelSpec(baseID)
@@ -228,6 +240,10 @@ func refreshCatalogFromUpstream(hostCallbackID string) {
 		}
 	}
 
+	if len(liveIDs) == 0 {
+		return // Keep the last known good catalog if upstream is unavailable.
+	}
+
 	// 2. Fetch models.opencode.ai/api.json for rich metadata & wire protocol
 	type modelsDevEntry struct {
 		ID       string `json:"id"`
@@ -256,10 +272,12 @@ func refreshCatalogFromUpstream(hostCallbackID string) {
 	catalogMu.Lock()
 	defer catalogMu.Unlock()
 	ensureCatalogInitializedLocked()
+	previousCatalog := catalogByID
+	catalogByID = make(map[string]goModelSpec, len(liveIDs))
 	lastCatalogFetch = time.Now()
 
 	applyDevEntry := func(id string, entry modelsDevEntry) {
-		existing, hasExisting := catalogByID[id]
+		existing, hasExisting := previousCatalog[id]
 		if !hasExisting {
 			existing = inferModelSpec(id)
 		}
@@ -303,11 +321,6 @@ func refreshCatalogFromUpstream(hostCallbackID string) {
 		catalogByID[id] = existing
 	}
 
-	if goSection, ok := modelsDevRoot["opencode-go"]; ok {
-		for id, entry := range goSection.Models {
-			applyDevEntry(id, entry)
-		}
-	}
 	for _, id := range liveIDs {
 		if goSection, ok := modelsDevRoot["opencode-go"]; ok {
 			if entry, okEntry := goSection.Models[id]; okEntry {
@@ -321,7 +334,9 @@ func refreshCatalogFromUpstream(hostCallbackID string) {
 				continue
 			}
 		}
-		if _, exists := catalogByID[id]; !exists {
+		if existing, ok := previousCatalog[id]; ok {
+			catalogByID[id] = existing
+		} else {
 			catalogByID[id] = inferModelSpec(id)
 		}
 	}
@@ -335,6 +350,24 @@ func currentCatalogModelInfos() []pluginapi.ModelInfo {
 		specs = append(specs, spec)
 	}
 	catalogMu.Unlock()
+	known := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		known[spec.ID] = true
+	}
+	for id, protocol := range currentConfig().ExtraModels {
+		id = strings.TrimSpace(id)
+		if id == "" || known[id] {
+			continue
+		}
+		spec := inferModelSpec(id)
+		switch wireProtocol(strings.TrimSpace(protocol)) {
+		case wireProtocolChatCompletions, wireProtocolResponses, wireProtocolAnthropic, wireProtocolGemini:
+			spec.Protocol = wireProtocol(strings.TrimSpace(protocol))
+		default:
+			continue
+		}
+		specs = append(specs, spec)
+	}
 
 	sort.Slice(specs, func(i, j int) bool {
 		return specs[i].ID < specs[j].ID

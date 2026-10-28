@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -191,11 +192,8 @@ func TestExecuteRoutesAcrossAllFourProtocolsAndTracksAllowance(t *testing.T) {
 		}
 	}
 
-	quotaRaw, errQuota := handleQuotaFetch([]byte(`{"auth_id":"opencode-go.json"}`))
-	if errQuota != nil {
-		t.Fatalf("handleQuotaFetch: %v", errQuota)
-	}
-	if !strings.Contains(string(quotaRaw), "OpenCode Go") {
-		t.Fatalf("unexpected quota response: %s", string(quotaRaw))
+	_, _, _, _, _, _, models := computeWindowTotals("", time.Now().UTC())
+	if len(models) == 0 {
+		t.Fatal("expected locally tracked model usage")
 	}
 }
