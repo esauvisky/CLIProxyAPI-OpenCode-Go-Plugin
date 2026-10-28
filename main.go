@@ -114,16 +114,17 @@ func (e statusError) Error() string   { return e.message }
 func (e statusError) StatusCode() int { return e.httpStatus }
 
 type pluginConfig struct {
-	Enabled          bool    `yaml:"enabled" json:"enabled"`
-	Priority         int     `yaml:"priority" json:"priority"`
-	SessionID        string  `yaml:"session_id" json:"session_id"`
-	UserAgent        string  `yaml:"user_agent" json:"user_agent"`
-	ConsoleURL       string  `yaml:"console_url" json:"console_url"`
-	InferenceBaseURL string  `yaml:"inference_base_url" json:"inference_base_url"`
-	Plan             string  `yaml:"plan" json:"plan"`
-	Allowance5h      float64 `yaml:"allowance_5h" json:"allowance_5h"`
-	AllowanceWeekly  float64 `yaml:"allowance_weekly" json:"allowance_weekly"`
-	AllowanceMonthly float64 `yaml:"allowance_monthly" json:"allowance_monthly"`
+	ExtraModels      map[string]string `yaml:"extra_models" json:"extra_models"`
+	Enabled          bool              `yaml:"enabled" json:"enabled"`
+	Priority         int               `yaml:"priority" json:"priority"`
+	SessionID        string            `yaml:"session_id" json:"session_id"`
+	UserAgent        string            `yaml:"user_agent" json:"user_agent"`
+	ConsoleURL       string            `yaml:"console_url" json:"console_url"`
+	InferenceBaseURL string            `yaml:"inference_base_url" json:"inference_base_url"`
+	Plan             string            `yaml:"plan" json:"plan"`
+	Allowance5h      float64           `yaml:"allowance_5h" json:"allowance_5h"`
+	AllowanceWeekly  float64           `yaml:"allowance_weekly" json:"allowance_weekly"`
+	AllowanceMonthly float64           `yaml:"allowance_monthly" json:"allowance_monthly"`
 }
 
 type lifecycleRequest struct {
@@ -210,6 +211,11 @@ func pluginRegistration() registration {
 					Type:        pluginapi.ConfigFieldTypeString,
 					Default:     defaultSessionHeader,
 					Description: "Default x-opencode-session header sent when downstream request has no session ID.",
+				},
+				{
+					Name:        "extra_models",
+					Type:        pluginapi.ConfigFieldTypeObject,
+					Description: "Explicit model IDs omitted by the upstream list, mapped to openai, openai-response, claude, or gemini. Add only after verifying upstream support.",
 				},
 				{
 					Name:        "plan",

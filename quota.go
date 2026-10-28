@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"github.com/tidwall/gjson"
 )
@@ -384,61 +386,166 @@ func handleQuotaDescribe(_ []byte) ([]byte, error) {
 	})
 }
 
+type upstreamMeter struct {
+	Status   string   `json:"status"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt string   `json:"resetsAt"`
+	UsedUSD  *float64 `json:"used_usd,omitempty"`
+	LimitUSD *float64 `json:"limit_usd,omitempty"`
+}
+type upstreamUsage struct {
+	Rolling upstreamMeter `json:"rolling"`
+	Weekly  upstreamMeter `json:"weekly"`
+	Monthly upstreamMeter `json:"monthly"`
+}
+type dashboardAccount struct {
+	Name  string         `json:"name"`
+	Usage *upstreamUsage `json:"usage,omitempty"`
+	Error string         `json:"error,omitempty"`
+}
+
+func fetchUpstreamUsage(callback, token, org string) (*upstreamUsage, error) {
+	if token == "" {
+		return nil, fmt.Errorf("credential has no access token")
+	}
+	cfg := currentConfig()
+	headers := http.Header{"Authorization": {"Bearer " + token}, "Accept": {"application/json"}, "User-Agent": {cfg.UserAgent}, "x-opencode-session": {cfg.SessionID}}
+	if org != "" {
+		headers.Set("x-opencode-org-id", org)
+	}
+	origin := strings.TrimSuffix(strings.TrimRight(cfg.ConsoleURL, "/"), "/console")
+	response, err := doHostHTTP(callback, http.MethodGet, origin+"/zen/go/v1/usage", headers, nil)
+	if err != nil {
+		return nil, fmt.Errorf("could not reach OpenCode usage endpoint")
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("OpenCode usage endpoint returned HTTP %d", response.StatusCode)
+	}
+	var result struct {
+		Usage *upstreamUsage `json:"usage"`
+	}
+	if json.Unmarshal(response.Body, &result) != nil || result.Usage == nil {
+		return nil, fmt.Errorf("OpenCode did not return subscription usage")
+	}
+	for _, m := range []upstreamMeter{result.Usage.Rolling, result.Usage.Weekly, result.Usage.Monthly} {
+		if m.Percent == nil || *m.Percent < 0 || *m.Percent > 100 || (m.Status != "ok" && m.Status != "rate-limited") {
+			return nil, fmt.Errorf("OpenCode returned an unsupported usage status")
+		}
+	}
+	// The console endpoint returns actual meter amounts in microcents; the usage
+	// endpoint remains the fallback when the console endpoint is unavailable.
+	if status, err := doHostHTTP(callback, http.MethodGet, origin+"/console/api/go/status", headers, nil); err == nil && status.StatusCode == http.StatusOK {
+		var data struct {
+			Access struct {
+				Meters struct {
+					FiveHour struct {
+						Used  string `json:"usedMicroCents"`
+						Limit string `json:"limitMicroCents"`
+						Reset string `json:"resetsAt"`
+					} `json:"fiveHour"`
+					Week struct {
+						Used  string `json:"usedMicroCents"`
+						Limit string `json:"limitMicroCents"`
+						Reset string `json:"resetsAt"`
+					} `json:"week"`
+					Month struct {
+						Used  string `json:"usedMicroCents"`
+						Limit string `json:"limitMicroCents"`
+						Reset string `json:"resetsAt"`
+					} `json:"month"`
+				} `json:"meters"`
+			} `json:"access"`
+		}
+		if json.Unmarshal(status.Body, &data) == nil {
+			apply := func(m *upstreamMeter, usedRaw, limitRaw, reset string) {
+				used, errUsed := strconv.ParseFloat(usedRaw, 64)
+				limit, errLimit := strconv.ParseFloat(limitRaw, 64)
+				if errUsed != nil || errLimit != nil || used < 0 || limit <= 0 || math.IsInf(used, 0) || math.IsInf(limit, 0) || math.IsNaN(used) || math.IsNaN(limit) {
+					return
+				}
+				usedUSD, limitUSD, percent := used/100000000, limit/100000000, used/limit*100
+				m.UsedUSD, m.LimitUSD, m.Percent = &usedUSD, &limitUSD, &percent
+				if reset != "" {
+					m.ResetsAt = reset
+				}
+			}
+			apply(&result.Usage.Rolling, data.Access.Meters.FiveHour.Used, data.Access.Meters.FiveHour.Limit, data.Access.Meters.FiveHour.Reset)
+			apply(&result.Usage.Weekly, data.Access.Meters.Week.Used, data.Access.Meters.Week.Limit, data.Access.Meters.Week.Reset)
+			apply(&result.Usage.Monthly, data.Access.Meters.Month.Used, data.Access.Meters.Month.Limit, data.Access.Meters.Month.Reset)
+		}
+	}
+	return result.Usage, nil
+}
+func dashboardAccounts(callback string) ([]dashboardAccount, error) {
+	raw, err := callHost(pluginabi.MethodHostAuthList, map[string]any{"host_callback_id": callback})
+	if err != nil {
+		return nil, fmt.Errorf("could not list credentials")
+	}
+	var list struct {
+		Files []pluginapi.HostAuthFileEntry `json:"files"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, err
+	}
+	accounts := make([]dashboardAccount, 0)
+	for _, entry := range list.Files {
+		if entry.Disabled || (entry.Type != providerID && entry.Provider != providerID) {
+			continue
+		}
+		account := dashboardAccount{Name: firstNonEmpty(entry.Label, entry.Name, entry.ID)}
+		raw, err := callHost(pluginabi.MethodHostAuthGet, map[string]any{"host_callback_id": callback, "auth_index": entry.AuthIndex})
+		if err != nil {
+			account.Error = "could not read credential"
+			accounts = append(accounts, account)
+			continue
+		}
+		var record struct {
+			JSON json.RawMessage `json:"json"`
+		}
+		if json.Unmarshal(raw, &record) != nil {
+			account.Error = "invalid credential"
+			accounts = append(accounts, account)
+			continue
+		}
+		cred, ok := parseStoredCredential(record.JSON)
+		if !ok {
+			account.Error = "invalid credential"
+			accounts = append(accounts, account)
+			continue
+		}
+		account.Usage, err = fetchUpstreamUsage(callback, firstNonEmpty(cred.AccessToken, cred.APIKey), cred.OrgID)
+		if err != nil {
+			account.Error = err.Error()
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, nil
+}
 func handleQuotaFetch(raw []byte) ([]byte, error) {
 	var req rpcQuotaFetchRequest
 	if len(raw) > 0 {
-		if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
-			return nil, errUnmarshal
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
 		}
 	}
-	now := time.Now().UTC()
-	planLabel, cap5h, cap7d, cap30d := resolveAllowanceCapsForAuth(req)
-	used5h, used7d, used30d, oldest5h, oldest7d, oldest30d, _ := computeWindowTotals(req.AuthID, now)
-
-	makeBucket := func(window string, used, capVal float64, oldest time.Time, dur time.Duration) pluginapi.QuotaBucket {
-		rem := 1.0
-		if capVal > 0 {
-			rem = 1.0 - (used / capVal)
-		}
-		if rem < 0 {
-			rem = 0
-		} else if rem > 1 {
-			rem = 1
-		}
-		resetAt := now.Add(dur)
-		if !oldest.IsZero() {
-			resetAt = oldest.Add(dur)
-		}
-		return pluginapi.QuotaBucket{
-			Window:            window,
-			RemainingFraction: math.Round(rem*10000) / 10000,
-			ResetTime:         resetAt.Format(time.RFC3339),
-			Description:       fmt.Sprintf("$%.4f / $%.2f allowance used (%.1f%% remaining)", used, capVal, rem*100),
-		}
+	token, org := extractAuthCredentials(req.StorageJSON, req.Attributes)
+	usage, err := fetchUpstreamUsage(req.HostCallbackID, token, org)
+	if err != nil {
+		return nil, err
 	}
-
-	tierID := "go-plus"
-	if strings.Contains(strings.ToLower(planLabel), "($10") {
-		tierID = "go"
+	makeBucket := func(name string, m upstreamMeter) pluginapi.QuotaBucket {
+		used := *m.Percent
+		remaining := math.Max(0, math.Min(1, 1-used/100))
+		if m.Status == "rate-limited" {
+			remaining = 0
+		}
+		description := fmt.Sprintf("%.0f%% used (OpenCode)", used)
+		if m.UsedUSD != nil && m.LimitUSD != nil {
+			description = fmt.Sprintf("%.0f%% ($%.2f / $%.2f)", used, *m.UsedUSD, *m.LimitUSD)
+		}
+		return pluginapi.QuotaBucket{Window: name, RemainingFraction: remaining, ResetTime: m.ResetsAt, Description: description}
 	}
-
-	return okEnvelope(pluginapi.QuotaFetchResponse{
-		Subscription: &pluginapi.QuotaSubscription{
-			Plan:     planLabel,
-			TierName: planLabel,
-			TierID:   tierID,
-		},
-		Groups: []pluginapi.QuotaGroup{
-			{
-				DisplayName: "OpenCode Go Shared Allowance (Tracked by CPA)",
-				Buckets: []pluginapi.QuotaBucket{
-					makeBucket("5h", used5h, cap5h, oldest5h, rolling5hWindow),
-					makeBucket("weekly", used7d, cap7d, oldest7d, rollingWeeklyWindow),
-					makeBucket("monthly", used30d, cap30d, oldest30d, rollingMonthWindow),
-				},
-			},
-		},
-	})
+	return okEnvelope(pluginapi.QuotaFetchResponse{Groups: []pluginapi.QuotaGroup{{DisplayName: "OpenCode Go", Buckets: []pluginapi.QuotaBucket{makeBucket("5h", usage.Rolling), makeBucket("weekly", usage.Weekly), makeBucket("monthly", usage.Monthly)}}}})
 }
 
 func handleQuotaReset(_ []byte) ([]byte, error) {
@@ -555,20 +662,13 @@ func handleManagement(raw []byte) ([]byte, error) {
 		if strings.EqualFold(req.Method, http.MethodPost) {
 			_, _ = handleQuotaReset(nil)
 		}
-		now := time.Now().UTC()
-		planLabel, cap5h, cap7d, cap30d := resolveStatsPageAllowanceCaps()
-		used5h, used7d, used30d, _, _, _, models := computeWindowTotals("", now)
-
-		payload := map[string]any{
-			"plan":             planLabel,
-			"used_5h_usd":      used5h,
-			"cap_5h_usd":       cap5h,
-			"used_weekly_usd":  used7d,
-			"cap_weekly_usd":   cap7d,
-			"used_monthly_usd": used30d,
-			"cap_monthly_usd":  cap30d,
-			"models":           models,
+		accounts, err := dashboardAccounts(req.HostCallbackID)
+		_, _, _, _, _, _, models := computeWindowTotals("", time.Now().UTC())
+		payload := map[string]any{"accounts": accounts, "models": models}
+		if err != nil {
+			payload["accounts_error"] = err.Error()
 		}
+
 		body, _ := marshalJSONNoEscape(payload)
 		return okEnvelope(managementResponse{
 			StatusCode: http.StatusOK,
@@ -933,67 +1033,31 @@ const statsHTMLTemplate = `<!doctype html>
 </head>
 <body>
 <main class="main-content">
-  <header class="page-header">
-    <h1 class="page-title">OpenCode Go Stats</h1>
-    <p class="page-desc">Rolling allowance windows and per-model token and cost telemetry reported by OpenCode Go.</p>
-  </header>
-
-  <div class="status-bar">
-    <div class="status-pills">
-      <span class="status-pill">
-        <span class="status-dot"></span>
-        <span class="status-label">Plan</span>
-        <span class="status-value" id="planBadge">OpenCode Go</span>
-      </span>
-      <span class="status-pill">
-        <span class="status-label">Active Models</span>
-        <span class="status-value" id="activeModelsCount">0</span>
-      </span>
-      <span class="status-pill">
-        <span class="status-label">Total Requests</span>
-        <span class="status-value" id="totalReqCount">0</span>
-      </span>
-    </div>
-  </div>
-
-  <div class="toolbar">
-    <button class="btn" onclick="loadStats()">Refresh</button>
-    <button class="btn btn-danger" onclick="resetStats()">Reset Counters</button>
-  </div>
-
-  <div class="cards" id="bucketCards"></div>
-
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">Per-Model Allowance &amp; Token Breakdown</h2>
-      <span class="badge">Exact <code>usage.opencode</code> Telemetry</span>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Model</th>
-            <th>Protocol</th>
-            <th>Requests</th>
-            <th>Input Tok</th>
-            <th>Output Tok</th>
-            <th>Reasoning Tok</th>
-            <th>Cache Read</th>
-            <th>List Cost</th>
-            <th>Allowance Used</th>
-            <th>Weight</th>
-            <th>5h Allowance</th>
-            <th>7d Allowance</th>
-          </tr>
-        </thead>
-        <tbody id="modelsBody"></tbody>
-      </table>
-    </div>
+  <header class="page-header"><h1 class="page-title">OpenCode Go</h1><p class="page-desc" data-i18n="intro"></p></header>
+  <div class="toolbar"><button class="btn" id="refresh" data-i18n="refresh"></button></div>
+  <p id="message" role="status" aria-live="polite"></p>
+  <div id="accounts"></div>
+  <section class="card"><div class="card-header"><h2 class="card-title" data-i18n="models"></h2></div>
+    <p data-i18n="localNotice" class="subtle"></p><div class="table-wrap"><table><thead><tr>
+      <th data-i18n="model"></th><th data-i18n="requests"></th><th data-i18n="input"></th><th data-i18n="output"></th><th data-i18n="allowance"></th>
+    </tr></thead><tbody id="modelsBody"></tbody></table></div>
   </section>
 </main>
 <script>
 const STATS_API_URL = '/v0/management/plugins/opencode-go-oauth/stats';
-let data = { plan: 'OpenCode Go ($10/mo)', used_5h_usd: 0, cap_5h_usd: 12, used_weekly_usd: 0, cap_weekly_usd: 30, used_monthly_usd: 0, cap_monthly_usd: 60, models: [] };
+let data = null;
+const dictionaries = {
+'en': ['Account usage from OpenCode.','Refresh','5-hour','Weekly','Monthly','used','Resets','No OpenCode Go credentials found.','Usage unavailable','Could not load data. Sign in to CPA with “Remember password” enabled, then refresh.','Local model usage','Only requests observed since this service started are included.','Model','Requests','Input tokens','Output tokens','Allowance used','No requests recorded in this session.','Loading…'],
+'zh-CN': ['来自 OpenCode 的账号用量。','刷新','5 小时','每周','每月','已使用','重置时间','未找到 OpenCode Go 认证。','用量不可用','无法加载数据。请登录 CPA 并勾选“记住密码”，然后刷新。','本地模型用量','仅包含服务启动后记录的请求。','模型','请求数','输入 Token','输出 Token','使用额度','本次服务运行期间尚无请求记录。','加载中…'],
+'zh-TW': ['來自 OpenCode 的帳號用量。','重新整理','5 小時','每週','每月','已使用','重設時間','找不到 OpenCode Go 認證。','用量無法取得','無法載入資料。請登入 CPA 並勾選「記住密碼」，然後重新整理。','本機模型用量','僅包含服務啟動後記錄的請求。','模型','請求數','輸入 Token','輸出 Token','使用額度','本次服務執行期間尚無請求記錄。','載入中…'],
+'ru': ['Использование аккаунта OpenCode.','Обновить','5 часов','Неделя','Месяц','использовано','Сброс','Учётные данные OpenCode Go не найдены.','Данные недоступны','Не удалось загрузить данные. Войдите в CPA с включённым «Запомнить пароль» и обновите страницу.','Локальное использование моделей','Только запросы с момента запуска сервиса.','Модель','Запросы','Входные токены','Выходные токены','Использованная квота','За этот сеанс запросов нет.','Загрузка…'],
+'vi': ['Mức sử dụng tài khoản từ OpenCode.','Làm mới','5 giờ','Hàng tuần','Hàng tháng','đã dùng','Đặt lại','Không tìm thấy thông tin xác thực OpenCode Go.','Không có dữ liệu sử dụng','Không thể tải dữ liệu. Đăng nhập CPA và chọn “Ghi nhớ mật khẩu”, sau đó làm mới.','Mức dùng mô hình cục bộ','Chỉ gồm các yêu cầu từ khi dịch vụ khởi động.','Mô hình','Yêu cầu','Token đầu vào','Token đầu ra','Hạn mức đã dùng','Chưa có yêu cầu trong phiên này.','Đang tải…'],
+'ko': ['OpenCode 계정 사용량입니다.','새로고침','5시간','주간','월간','사용','초기화','OpenCode Go 인증 정보를 찾을 수 없습니다.','사용량을 가져올 수 없습니다','데이터를 불러올 수 없습니다. CPA에 로그인할 때 “비밀번호 기억”을 선택한 후 새로고침하세요.','로컬 모델 사용량','서비스 시작 이후 기록된 요청만 포함합니다.','모델','요청','입력 토큰','출력 토큰','사용 한도','이번 세션에 기록된 요청이 없습니다.','불러오는 중…']
+};
+const keys = ['intro','refresh','rolling','weekly','monthly','used','reset','noAccounts','unavailable','loadError','models','localNotice','model','requests','input','output','allowance','empty','loading'];
+function locale() { try { return JSON.parse(localStorage.getItem('cli-proxy-language') || '{}')?.state?.language || 'zh-CN'; } catch (_) { return 'zh-CN'; } }
+function t(key) { const l=locale(); return (dictionaries[l] || dictionaries['zh-CN'])[keys.indexOf(key)] || key; }
+function translate() { document.documentElement.lang=locale(); document.querySelectorAll('[data-i18n]').forEach(el => el.textContent=t(el.dataset.i18n)); }
 
 function syncThemeWithCPA() {
   const apply = (mode) => {
@@ -1065,7 +1129,7 @@ function detectStoredManagementKey() {
   try {
     const authRaw = localStorage.getItem('cli-proxy-auth');
     if (authRaw) {
-      const parsed = JSON.parse(authRaw);
+      const parsed = JSON.parse(deobfuscateCPASecret(authRaw));
       const k = parsed?.state?.managementKey;
       if (k && typeof k === 'string' && k.trim()) return k.trim();
     }
@@ -1093,77 +1157,46 @@ function authHeaders() {
   return headers;
 }
 
-function renderBucket(label, used, cap) {
-  const usedPct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
-  const remPct = Math.max(0, 100 - usedPct);
-  const tier = remPct >= 70 ? 'high' : (remPct >= 30 ? 'medium' : 'low');
-  return '<div class="card">' +
-    '<div class="bucket-header">' +
-      '<span class="bucket-title">' + label + '</span>' +
-      '<span class="bucket-pct">' + remPct.toFixed(1) + '% remaining</span>' +
-    '</div>' +
-    '<div class="bucket-val">$' + used.toFixed(4) + ' <span class="bucket-cap">/ $' + cap.toFixed(2) + '</span></div>' +
-    '<div class="quota-bar"><div class="quota-fill ' + tier + '" style="width:' + remPct.toFixed(1) + '%"></div></div>' +
-  '</div>';
-}
-
+function el(tag, className, text) { const n=document.createElement(tag); if(className)n.className=className; if(text != null)n.textContent=text; return n; }
 function renderStats() {
-  const models = data.models || [];
-  const totalReqs = models.reduce((acc, m) => acc + (m.requests || 0), 0);
-  document.getElementById('planBadge').textContent = data.plan || 'OpenCode Go';
-  document.getElementById('activeModelsCount').textContent = String(models.length);
-  document.getElementById('totalReqCount').textContent = totalReqs.toLocaleString();
-
-  document.getElementById('bucketCards').innerHTML =
-    renderBucket('5-Hour Rolling Window (20%)', data.used_5h_usd || 0, data.cap_5h_usd || 12) +
-    renderBucket('Weekly Rolling Window (50%)', data.used_weekly_usd || 0, data.cap_weekly_usd || 30) +
-    renderBucket('Monthly Rolling Window (100%)', data.used_monthly_usd || 0, data.cap_monthly_usd || 60);
-
-  const tbody = document.getElementById('modelsBody');
-  if (models.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="12" class="subtle" style="text-align:center;padding:24px;">No OpenCode Go requests recorded yet in this session.</td></tr>';
-  } else {
-    tbody.innerHTML = models.map(m => '<tr>' +
-      '<td><strong>' + m.display_name + '</strong> <span class="mono subtle">(' + m.model + ')</span></td>' +
-      '<td><span class="badge mono">' + m.protocol + '</span></td>' +
-      '<td class="mono">' + m.requests.toLocaleString() + '</td>' +
-      '<td class="mono">' + m.input_tokens.toLocaleString() + '</td>' +
-      '<td class="mono">' + m.output_tokens.toLocaleString() + '</td>' +
-      '<td class="mono">' + m.reasoning_tokens.toLocaleString() + '</td>' +
-      '<td class="mono">' + m.cache_read_tokens.toLocaleString() + '</td>' +
-      '<td class="mono">$' + m.list_cost_usd.toFixed(5) + '</td>' +
-      '<td class="mono"><strong>$' + m.allowance_usd.toFixed(5) + '</strong></td>' +
-      '<td class="mono">' + (m.weight_ratio ? m.weight_ratio + '×' : '—') + '</td>' +
-      '<td class="mono">$' + m.allowance_5h_usd.toFixed(5) + '</td>' +
-      '<td class="mono">$' + m.allowance_7d_usd.toFixed(5) + '</td>' +
-    '</tr>').join('');
+ translate();
+ const container=document.getElementById('accounts'); container.replaceChildren();
+ const message=document.getElementById('message'); message.textContent='';
+ if (!data) { message.textContent=t('loading'); return; }
+ if (data.accounts_error) message.textContent=t('unavailable');
+ if (!data.accounts_error && !(data.accounts || []).length) message.textContent=t('noAccounts');
+ for (const account of (data.accounts || [])) {
+  const section=el('section','card'); section.style.marginBottom='16px';
+  section.append(el('h2','card-title',account.name));
+  if (!account.usage) section.append(el('p','subtle',t('unavailable')));
+  else {
+   const cards=el('div','cards');
+   for (const [name, meter] of [['rolling',account.usage.rolling],['weekly',account.usage.weekly],['monthly',account.usage.monthly]]) {
+    const card=el('div','card'); const percent=meter.status==='rate-limited'?100:meter.percent;
+    card.append(el('div','bucket-title',t(name)),el('div','bucket-val',new Intl.NumberFormat(locale(),{maximumFractionDigits:1}).format(percent)+'% '+t('used')));
+    if (meter.resetsAt) { const d=new Date(meter.resetsAt); if (!isNaN(d)) card.append(el('div','subtle',t('reset')+': '+new Intl.DateTimeFormat(locale(),{dateStyle:'medium',timeStyle:'short'}).format(d))); }
+    cards.append(card);
+   }
+   section.append(cards);
   }
+  container.append(section);
+ }
+ const tbody=document.getElementById('modelsBody');tbody.replaceChildren();
+ for(const m of (data.models || [])) { const row=el('tr'); for(const value of [m.model,m.requests,m.input_tokens,m.output_tokens,'$'+Number(m.allowance_usd).toFixed(5)])row.append(el('td','',String(value)));tbody.append(row); }
+ if (!(data.models || []).length) { const row=el('tr');const cell=el('td','subtle',t('empty'));cell.colSpan=5;row.append(cell);tbody.append(row); }
 }
-
 async function loadStats() {
-  try {
-    const resp = await fetch(STATS_API_URL, { method: 'GET', headers: authHeaders(), cache: 'no-store' });
-    if (resp.ok) {
-      data = await resp.json();
-      renderStats();
-    }
-  } catch (_) {}
+ document.getElementById('message').textContent=t('loading');document.getElementById('refresh').disabled=true;
+ try {
+  const resp=await fetch(STATS_API_URL,{headers:authHeaders(),cache:'no-store',signal:AbortSignal.timeout(30000)});
+  if(!resp.ok) throw new Error('http'); data=await resp.json();renderStats();
+ } catch (_) { data=null;document.getElementById('accounts').replaceChildren();document.getElementById('message').textContent=t('loadError'); }
+ finally {document.getElementById('refresh').disabled=false;}
 }
-
-async function resetStats() {
-  if (!confirm('Reset tracked OpenCode Go usage counters?')) return;
-  try {
-    const resp = await fetch(STATS_API_URL, { method: 'POST', headers: authHeaders(), cache: 'no-store' });
-    if (resp.ok) {
-      data = await resp.json();
-      renderStats();
-    }
-  } catch (_) {}
-}
-
-syncThemeWithCPA();
-renderStats();
-void loadStats();
+syncThemeWithCPA(); translate();
+document.getElementById('refresh').addEventListener('click',loadStats);
+window.addEventListener('storage',event=>{if(event.key==='cli-proxy-language')renderStats();});
+renderStats();void loadStats();
 </script>
 </body>
 </html>
