@@ -551,7 +551,7 @@ func handleManagement(raw []byte) ([]byte, error) {
 		_ = json.Unmarshal(raw, &req)
 	}
 	cleanedPath := strings.TrimRight(strings.TrimSpace(req.Path), "/")
-	if strings.HasSuffix(cleanedPath, mgmtStatsRoutePath) {
+	if cleanedPath == "/v0/management"+mgmtStatsRoutePath {
 		if strings.EqualFold(req.Method, http.MethodPost) {
 			_, _ = handleQuotaReset(nil)
 		}
