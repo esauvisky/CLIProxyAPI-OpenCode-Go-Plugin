@@ -39,7 +39,7 @@ func TestDashboardUsesUpstreamQuotaAndCredentials(t *testing.T) {
 	}
 	request, _ := json.Marshal(rpcQuotaFetchRequest{QuotaFetchRequest: pluginapi.QuotaFetchRequest{StorageJSON: []byte(`{"type":"opencode-go","access_token":"test-token","org_id":"org"}`)}})
 	quota, err := handleQuotaFetch(request)
-	if err != nil || !strings.Contains(string(quota), "20% ($6.00 / $30.00)") {
+	if err != nil || !strings.Contains(string(quota), "weekly ($24.00 / $30.00)") {
 		t.Fatalf("quota=%s err=%v", quota, err)
 	}
 }

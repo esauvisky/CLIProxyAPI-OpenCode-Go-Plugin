@@ -539,9 +539,10 @@ func handleQuotaFetch(raw []byte) ([]byte, error) {
 		if m.Status == "rate-limited" {
 			remaining = 0
 		}
-		description := fmt.Sprintf("%.0f%% used (OpenCode)", used)
+		description := name
 		if m.UsedUSD != nil && m.LimitUSD != nil {
-			description = fmt.Sprintf("%.0f%% ($%.2f / $%.2f)", used, *m.UsedUSD, *m.LimitUSD)
+			remainingUSD := math.Max(0, *m.LimitUSD-*m.UsedUSD)
+			description = fmt.Sprintf("%s ($%.2f / $%.2f)", name, remainingUSD, *m.LimitUSD)
 		}
 		return pluginapi.QuotaBucket{Window: name, RemainingFraction: remaining, ResetTime: m.ResetsAt, Description: description}
 	}
