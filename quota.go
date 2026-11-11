@@ -191,33 +191,52 @@ func commitOpenCodeStreamUsage(authID, model string, sample openCodeUsageSample)
 	}
 }
 
-func resolveAllowanceCapsForPlan(plan string) (planLabel string, cap5h, capWeekly, capMonth float64) {
-	cfg := currentConfig()
-	if normalizePlanTier(plan) == "go-plus" {
-		planLabel = "OpenCode Go Plus ($40/mo)"
-		cap5h = defaultGoPlus5h
-		capWeekly = defaultGoPlusWeekly
-		capMonth = defaultGoPlusMonth
-	} else {
-		planLabel = "OpenCode Go ($10/mo)"
-		cap5h = defaultGoAllowance5h
-		capWeekly = defaultGoAllowanceWeekly
-		capMonth = defaultGoAllowanceMonth
-	}
-	if cfg.Allowance5h > 0 {
-		cap5h = cfg.Allowance5h
-	}
-	if cfg.AllowanceWeekly > 0 {
-		capWeekly = cfg.AllowanceWeekly
-	}
-	if cfg.AllowanceMonthly > 0 {
-		capMonth = cfg.AllowanceMonthly
-	}
-	return planLabel, cap5h, capWeekly, capMonth
+// monthlyCapByPlan is each model's monthly allowance cap in dollars, from https://opencode.ai/docs/go/ (Usage limits).
+// Each model's 5h window is 20% of its monthly cap and its weekly window 50%. Models missing here have no
+// published cap and get no quota group.
+var monthlyCapByPlan = map[string]map[string]float64{
+	"go": {
+		"glm-5.3-flash": 60, "glm-5.3": 15, "glm-5.2": 60,
+		"kimi-k3.1-pro": 15, "kimi-k3": 15, "kimi-k2.7-code": 60,
+		"longcat-2.0": 60, "step-5-preview": 15,
+		"mimo-v2.6-flash": 60, "mimo-v2.6-pro": 15, "mimo-v2.5": 60, "mimo-v2.5-pro": 15,
+		"minimax-m3.1-flash": 20, "minimax-m3": 60,
+		"muse-spark-1.3-contributor": 60, "muse-spark-1.2-contributor": 60,
+		"qwen3.8-max": 15, "qwen3.8-flash": 30, "qwen3.7-plus": 60,
+		"deepseek-v4.1-flash": 100, "deepseek-v4-pro": 15,
+		"hy4": 60, "hy4-preview": 30, "hy3": 60,
+		"grok-4.7": 15, "gpt-6-luna": 15, "gpt-5.6-luna": 15, "claude-haiku-5-5": 15,
+		"gemini-4-argon": 30,
+	},
+	"go-plus": {
+		"glm-5.3-flash": 180, "glm-5.3": 120, "glm-5.2": 180,
+		"kimi-k3.1-pro": 60, "kimi-k3": 60, "kimi-k2.7-code": 180,
+		"longcat-2.0": 240, "step-5-preview": 60,
+		"mimo-v2.6-flash": 120, "mimo-v2.6-pro": 60, "mimo-v2.5": 120, "mimo-v2.5-pro": 60,
+		"minimax-m3.1-flash": 80, "minimax-m3": 180,
+		"muse-spark-1.3-contributor": 120, "muse-spark-1.2-contributor": 120,
+		"qwen3.8-max": 60, "qwen3.8-flash": 90, "qwen3.7-plus": 180,
+		"deepseek-v4.1-flash": 200, "deepseek-v4-pro": 60,
+		"hy4": 240, "hy4-preview": 120, "hy3": 240,
+		"grok-4.7": 60, "gpt-6-luna": 60, "gpt-5.6-luna": 60, "claude-haiku-5-5": 60,
+		"gemini-4-argon": 120,
+	},
 }
 
-func resolveAllowanceCaps() (planLabel string, cap5h, capWeekly, capMonth float64) {
-	return resolveAllowanceCapsForPlan(currentConfig().Plan)
+// unlimitedModels are the free models the docs list as "Unlimited (limited time)" on every plan.
+var unlimitedModels = map[string]bool{
+	"beam-free":                true,
+	"iceman-contributor-free":  true,
+	"longcat-2.5-preview-free": true,
+}
+
+var windowShareOfMonthly = [3]float64{0.2, 0.5, 1.0}
+
+func planTierAndLabel(plan string) (tier, label string) {
+	if normalizePlanTier(plan) == "go-plus" {
+		return "go-plus", "OpenCode Go Plus ($40/mo)"
+	}
+	return "go", "OpenCode Go ($10/mo)"
 }
 
 func extractPlanOverrideFromAuth(req rpcQuotaFetchRequest) string {
@@ -250,10 +269,10 @@ func extractPlanOverrideFromAuth(req rpcQuotaFetchRequest) string {
 	return ""
 }
 
-func resolveAllowanceCapsForAuth(req rpcQuotaFetchRequest) (planLabel string, cap5h, capWeekly, capMonth float64) {
+func resolvePlanForAuth(req rpcQuotaFetchRequest) string {
 	// 1. Explicit per-credential override in Auth File Details / Edit (Note, Headers x-opencode-plan, or plan field in JSON)
 	if override := extractPlanOverrideFromAuth(req); override != "" {
-		return resolveAllowanceCapsForPlan(override)
+		return override
 	}
 	authID := strings.TrimSpace(req.AuthID)
 	if authID != "" {
@@ -261,7 +280,7 @@ func resolveAllowanceCapsForAuth(req rpcQuotaFetchRequest) (planLabel string, ca
 		cached := planByAuthID[authID]
 		usageMu.RUnlock()
 		if cached != "" {
-			return resolveAllowanceCapsForPlan(cached)
+			return cached
 		}
 	}
 	// 2. Live $0.00 probe on beam-free for this specific credential
@@ -272,43 +291,47 @@ func resolveAllowanceCapsForAuth(req rpcQuotaFetchRequest) (planLabel string, ca
 			planByAuthID[authID] = probed
 			usageMu.Unlock()
 		}
-		return resolveAllowanceCapsForPlan(probed)
+		return probed
 	}
-	return resolveAllowanceCaps()
+	return currentConfig().Plan
 }
 
-func computeWindowTotals(authID string, now time.Time) (used5h, used7d, used30d float64, oldest5h, oldest7d, oldest30d time.Time) {
-	cutoff5h := now.Add(-rolling5hWindow)
-	cutoff7d := now.Add(-rollingWeeklyWindow)
-	cutoff30d := now.Add(-rollingMonthWindow)
+var rollingWindows = [3]struct {
+	name string
+	dur  time.Duration
+}{
+	{"5h", rolling5hWindow},
+	{"weekly", rollingWeeklyWindow},
+	{"monthly", rollingMonthWindow},
+}
 
+// modelWindowUsage holds one model's tracked allowance spend and oldest event per window (5h, weekly, monthly).
+type modelWindowUsage struct {
+	allowance [3]float64
+	oldest    [3]time.Time
+}
+
+func computeModelWindowTotals(authID string, now time.Time) map[string]modelWindowUsage {
 	usageMu.RLock()
 	defer usageMu.RUnlock()
 
+	out := make(map[string]modelWindowUsage)
 	for _, ev := range usageEvents {
 		if authID != "" && ev.AuthID != "" && ev.AuthID != authID {
 			continue
 		}
-		if ev.Timestamp.After(cutoff30d) {
-			used30d += ev.Allowance
-			if oldest30d.IsZero() || ev.Timestamp.Before(oldest30d) {
-				oldest30d = ev.Timestamp
+		usage := out[ev.Model]
+		for i, w := range rollingWindows {
+			if ev.Timestamp.After(now.Add(-w.dur)) {
+				usage.allowance[i] += ev.Allowance
+				if usage.oldest[i].IsZero() || ev.Timestamp.Before(usage.oldest[i]) {
+					usage.oldest[i] = ev.Timestamp
+				}
 			}
 		}
-		if ev.Timestamp.After(cutoff7d) {
-			used7d += ev.Allowance
-			if oldest7d.IsZero() || ev.Timestamp.Before(oldest7d) {
-				oldest7d = ev.Timestamp
-			}
-		}
-		if ev.Timestamp.After(cutoff5h) {
-			used5h += ev.Allowance
-			if oldest5h.IsZero() || ev.Timestamp.Before(oldest5h) {
-				oldest5h = ev.Timestamp
-			}
-		}
+		out[ev.Model] = usage
 	}
-	return
+	return out
 }
 
 func handleQuotaDescribe(_ []byte) ([]byte, error) {
@@ -327,34 +350,51 @@ func handleQuotaFetch(raw []byte) ([]byte, error) {
 		}
 	}
 	now := time.Now().UTC()
-	planLabel, cap5h, cap7d, cap30d := resolveAllowanceCapsForAuth(req)
-	used5h, used7d, used30d, oldest5h, oldest7d, oldest30d := computeWindowTotals(req.AuthID, now)
+	tierID, planLabel := planTierAndLabel(resolvePlanForAuth(req))
+	monthlyCaps := monthlyCapByPlan[tierID]
 
-	makeBucket := func(window string, used, capVal float64, oldest time.Time, dur time.Duration) pluginapi.QuotaBucket {
-		rem := 1.0
-		if capVal > 0 {
-			rem = 1.0 - (used / capVal)
-		}
-		if rem < 0 {
-			rem = 0
-		} else if rem > 1 {
-			rem = 1
-		}
-		resetAt := now.Add(dur)
-		if !oldest.IsZero() {
-			resetAt = oldest.Add(dur)
-		}
-		return pluginapi.QuotaBucket{
-			Window:            window,
-			RemainingFraction: math.Round(rem*10000) / 10000,
-			ResetTime:         resetAt.Format(time.RFC3339),
-			Description:       fmt.Sprintf("$%.4f / $%.2f allowance used (%.1f%% remaining)", used, capVal, rem*100),
-		}
+	enabled, errEnabled := enabledModelsForAuth(req.AuthID)
+	if errEnabled != nil {
+		return nil, errEnabled
 	}
 
-	tierID := "go-plus"
-	if strings.Contains(strings.ToLower(planLabel), "($10") {
-		tierID = "go"
+	perModel := computeModelWindowTotals(req.AuthID, now)
+	groups := make([]pluginapi.QuotaGroup, 0, len(enabled))
+	for _, id := range enabled {
+		buckets := make([]pluginapi.QuotaBucket, 0, len(rollingWindows))
+		if unlimitedModels[id] {
+			for _, w := range rollingWindows {
+				buckets = append(buckets, pluginapi.QuotaBucket{
+					Window:            w.name,
+					RemainingFraction: 1,
+					Description:       "unlimited (free model, limited time)",
+				})
+			}
+		} else {
+			monthly, documented := monthlyCaps[id]
+			if !documented {
+				continue
+			}
+			usage := perModel[id]
+			for i, w := range rollingWindows {
+				capVal := monthly * windowShareOfMonthly[i]
+				rem := math.Min(math.Max(1.0-usage.allowance[i]/capVal, 0), 1)
+				resetAt := now.Add(w.dur)
+				if !usage.oldest[i].IsZero() {
+					resetAt = usage.oldest[i].Add(w.dur)
+				}
+				buckets = append(buckets, pluginapi.QuotaBucket{
+					Window:            w.name,
+					RemainingFraction: math.Round(rem*10000) / 10000,
+					ResetTime:         resetAt.Format(time.RFC3339),
+					Description:       fmt.Sprintf("$%.4f / $%.2f allowance used (%.1f%% remaining)", usage.allowance[i], capVal, rem*100),
+				})
+			}
+		}
+		groups = append(groups, pluginapi.QuotaGroup{
+			DisplayName: lookupModelSpec(id).DisplayName,
+			Buckets:     buckets,
+		})
 	}
 
 	return okEnvelope(pluginapi.QuotaFetchResponse{
@@ -363,16 +403,7 @@ func handleQuotaFetch(raw []byte) ([]byte, error) {
 			TierName: planLabel,
 			TierID:   tierID,
 		},
-		Groups: []pluginapi.QuotaGroup{
-			{
-				DisplayName: "OpenCode Go Shared Allowance (Tracked by CPA)",
-				Buckets: []pluginapi.QuotaBucket{
-					makeBucket("5h", used5h, cap5h, oldest5h, rolling5hWindow),
-					makeBucket("weekly", used7d, cap7d, oldest7d, rollingWeeklyWindow),
-					makeBucket("monthly", used30d, cap30d, oldest30d, rollingMonthWindow),
-				},
-			},
-		},
+		Groups: groups,
 	})
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -41,6 +42,8 @@ var (
 	catalogByID        map[string]goModelSpec
 	catalogInitialized bool
 	lastCatalogFetch   time.Time
+
+	enabledModelsByAuthID = make(map[string][]string)
 )
 
 var builtinGoCatalog = []goModelSpec{
@@ -187,11 +190,82 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
 		}
 	}
 
+	models := currentCatalogModelInfos()
+
+	// Mirrors the host's rule: credential-level exclusions replace the global oauth-excluded-models list.
+	excluded := req.Host.ExcludedModels[strings.ToLower(strings.TrimSpace(req.AuthProvider))]
+	if val := strings.TrimSpace(req.Attributes["excluded_models"]); val != "" {
+		excluded = strings.Split(val, ",")
+	}
+	enabled := make([]string, 0, len(models))
+	for _, model := range models {
+		if !modelExcluded(model.ID, excluded) {
+			enabled = append(enabled, model.ID)
+		}
+	}
+	catalogMu.Lock()
+	enabledModelsByAuthID[req.AuthID] = enabled
+	catalogMu.Unlock()
+
 	return okEnvelope(pluginapi.ModelResponse{
 		Provider:   providerID,
-		Models:     currentCatalogModelInfos(),
+		Models:     models,
 		AuthUpdate: authUpdate,
 	})
+}
+
+func enabledModelsForAuth(authID string) ([]string, error) {
+	catalogMu.RLock()
+	defer catalogMu.RUnlock()
+	enabled, ok := enabledModelsByAuthID[authID]
+	if !ok {
+		return nil, fmt.Errorf("opencode-go: no model list registered for auth %q (model.for_auth has not run for it)", authID)
+	}
+	return enabled, nil
+}
+
+// modelExcluded matches the host's excluded-models semantics: case-insensitive, '*' wildcards.
+func modelExcluded(modelID string, patterns []string) bool {
+	id := strings.ToLower(modelID)
+	for _, raw := range patterns {
+		pattern := strings.ToLower(strings.TrimSpace(raw))
+		if pattern == "" {
+			continue
+		}
+		if !strings.Contains(pattern, "*") {
+			if pattern == id {
+				return true
+			}
+			continue
+		}
+		parts := strings.Split(pattern, "*")
+		value := id
+		if !strings.HasPrefix(value, parts[0]) {
+			continue
+		}
+		value = value[len(parts[0]):]
+		last := parts[len(parts)-1]
+		if !strings.HasSuffix(value, last) {
+			continue
+		}
+		value = value[:len(value)-len(last)]
+		matched := true
+		for _, mid := range parts[1 : len(parts)-1] {
+			if mid == "" {
+				continue
+			}
+			idx := strings.Index(value, mid)
+			if idx < 0 {
+				matched = false
+				break
+			}
+			value = value[idx+len(mid):]
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 func refreshCatalogFromUpstream(hostCallbackID string) {

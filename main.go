@@ -74,22 +74,16 @@ const (
 	pluginID      = "opencode-go-oauth"
 	providerID    = "opencode-go"
 	pluginName    = "OpenCode Go"
-	pluginVersion = "0.1.11"
+	pluginVersion = "0.1.12"
 	pluginAuthor  = "esauvisky"
 	pluginRepo    = "https://github.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin"
 	pluginLogo    = "https://raw.githubusercontent.com/esauvisky/CLIProxyAPI-OpenCode-Go-Plugin/main/assets/logo.png"
 
-	defaultConsoleURL        = "https://opencode.ai/console"
-	defaultInferenceBaseURL  = "https://opencode.ai/inference/go"
-	defaultOAuthClientID     = "opencode-cli"
-	defaultSessionHeader     = "cpa-main"
-	defaultUserAgent         = "opencode/1.2.0"
-	defaultGoAllowance5h     = 12.0
-	defaultGoAllowanceWeekly = 30.0
-	defaultGoAllowanceMonth  = 60.0
-	defaultGoPlus5h          = 48.0
-	defaultGoPlusWeekly      = 120.0
-	defaultGoPlusMonth       = 240.0
+	defaultConsoleURL       = "https://opencode.ai/console"
+	defaultInferenceBaseURL = "https://opencode.ai/inference/go"
+	defaultOAuthClientID    = "opencode-cli"
+	defaultSessionHeader    = "cpa-main"
+	defaultUserAgent        = "opencode/1.2.0"
 )
 
 type envelope struct {
@@ -114,16 +108,13 @@ func (e statusError) Error() string   { return e.message }
 func (e statusError) StatusCode() int { return e.httpStatus }
 
 type pluginConfig struct {
-	Enabled          bool    `yaml:"enabled" json:"enabled"`
-	Priority         int     `yaml:"priority" json:"priority"`
-	SessionID        string  `yaml:"session_id" json:"session_id"`
-	UserAgent        string  `yaml:"user_agent" json:"user_agent"`
-	ConsoleURL       string  `yaml:"console_url" json:"console_url"`
-	InferenceBaseURL string  `yaml:"inference_base_url" json:"inference_base_url"`
-	Plan             string  `yaml:"plan" json:"plan"`
-	Allowance5h      float64 `yaml:"allowance_5h" json:"allowance_5h"`
-	AllowanceWeekly  float64 `yaml:"allowance_weekly" json:"allowance_weekly"`
-	AllowanceMonthly float64 `yaml:"allowance_monthly" json:"allowance_monthly"`
+	Enabled          bool   `yaml:"enabled" json:"enabled"`
+	Priority         int    `yaml:"priority" json:"priority"`
+	SessionID        string `yaml:"session_id" json:"session_id"`
+	UserAgent        string `yaml:"user_agent" json:"user_agent"`
+	ConsoleURL       string `yaml:"console_url" json:"console_url"`
+	InferenceBaseURL string `yaml:"inference_base_url" json:"inference_base_url"`
+	Plan             string `yaml:"plan" json:"plan"`
 }
 
 type lifecycleRequest struct {
@@ -215,7 +206,7 @@ func pluginRegistration() registration {
 					Type:        pluginapi.ConfigFieldTypeEnum,
 					Default:     "go",
 					EnumValues:  []string{"go", "go-plus"},
-					Description: "Subscription tier for allowance bucket calculations: go ($10/mo, $12/$30/$60) or go-plus ($40/mo, $48/$120/$240).",
+					Description: "Subscription tier selecting each model's published allowance caps when the credential's tier cannot be detected: go ($10/mo) or go-plus ($40/mo).",
 				},
 			},
 		},

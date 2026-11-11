@@ -191,11 +191,30 @@ func TestExecuteRoutesAcrossAllFourProtocolsAndTracksAllowance(t *testing.T) {
 		}
 	}
 
+	if _, errModels := handleModelForAuth([]byte(`{"AuthID":"opencode-go.json","AuthProvider":"opencode-go","Attributes":{"excluded_models":"gpt-*"}}`)); errModels != nil {
+		t.Fatalf("handleModelForAuth: %v", errModels)
+	}
 	quotaRaw, errQuota := handleQuotaFetch([]byte(`{"auth_id":"opencode-go.json"}`))
 	if errQuota != nil {
 		t.Fatalf("handleQuotaFetch: %v", errQuota)
 	}
-	if !strings.Contains(string(quotaRaw), "OpenCode Go") {
-		t.Fatalf("unexpected quota response: %s", string(quotaRaw))
+	if gjson.GetBytes(quotaRaw, "result.subscription.tierId").String() != "go-plus" {
+		t.Fatalf("unexpected quota subscription: %s", string(quotaRaw))
+	}
+	groups := gjson.GetBytes(quotaRaw, "result.groups")
+	// GLM-5.3 on Go Plus: $120/mo cap, so the 5h window is $24 and the weekly window $60.
+	glm := groups.Get(`#(displayName=="GLM-5.3")`)
+	if glm.Get("buckets.0.description").String() != "$0.0040 / $24.00 allowance used (100.0% remaining)" ||
+		glm.Get("buckets.1.description").String() != "$0.0040 / $60.00 allowance used (100.0% remaining)" {
+		t.Fatalf("unexpected GLM-5.3 group: %s", glm.Raw)
+	}
+	if groups.Get(`#(displayName=="Beam Free").buckets.0.remainingFraction`).Float() != 1 {
+		t.Fatalf("Beam Free not reported unlimited: %s", groups.Raw)
+	}
+	if groups.Get(`#(displayName=="GPT-6 Luna")`).Exists() {
+		t.Fatalf("excluded model GPT-6 Luna has a quota group: %s", groups.Raw)
+	}
+	if groups.Get(`#(displayName=="GLM-5.1")`).Exists() {
+		t.Fatalf("model without a published cap has a quota group: %s", groups.Raw)
 	}
 }
