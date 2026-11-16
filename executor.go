@@ -229,6 +229,7 @@ func finalizeWirePayload(payload []byte, spec goModelSpec, baseModel, suffix str
 		} else {
 			out, _ = sjson.DeleteBytes(out, "stream_options")
 		}
+		out = downgradeDeveloperRole(out)
 		if hasSuffix {
 			out = applyChatThinkingSuffix(out, spec, suffix)
 		}
@@ -257,6 +258,20 @@ func finalizeWirePayload(payload []byte, spec goModelSpec, baseModel, suffix str
 		out, _ = sjson.DeleteBytes(out, "model")
 		if hasSuffix {
 			out = applyGeminiThinkingSuffix(out, spec, suffix)
+		}
+	}
+	return out
+}
+
+func downgradeDeveloperRole(payload []byte) []byte {
+	messages := gjson.GetBytes(payload, "messages")
+	if !messages.IsArray() {
+		return payload
+	}
+	out := payload
+	for i, msg := range messages.Array() {
+		if msg.Get("role").String() == "developer" {
+			out, _ = sjson.SetBytes(out, fmt.Sprintf("messages.%d.role", i), "system")
 		}
 	}
 	return out

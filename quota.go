@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -342,6 +343,105 @@ func handleQuotaDescribe(_ []byte) ([]byte, error) {
 	})
 }
 
+type openCodeMeter struct {
+	Status   string   `json:"status"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt string   `json:"resetsAt"`
+	UsedUSD  *float64 `json:"used_usd,omitempty"`
+	LimitUSD *float64 `json:"limit_usd,omitempty"`
+}
+
+type openCodeUsage struct {
+	Rolling openCodeMeter `json:"rolling"`
+	Weekly  openCodeMeter `json:"weekly"`
+	Monthly openCodeMeter `json:"monthly"`
+}
+
+// fetchUpstreamUsage reads the account-wide meters from OpenCode. The plugin's
+// own per-model counters only see requests that go through this executor and
+// are lost on restart; these meters are the credential's real quota.
+func fetchUpstreamUsage(callback, token, org string) (*openCodeUsage, error) {
+	if strings.TrimSpace(callback) == "" {
+		return nil, fmt.Errorf("host callback unavailable")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("credential has no access token")
+	}
+	cfg := currentConfig()
+	headers := http.Header{
+		"Authorization":      {"Bearer " + strings.TrimSpace(token)},
+		"Accept":             {"application/json"},
+		"User-Agent":         {cfg.UserAgent},
+		"x-opencode-session": {cfg.SessionID},
+	}
+	if strings.TrimSpace(org) != "" {
+		headers.Set("x-opencode-org-id", strings.TrimSpace(org))
+	}
+	origin := strings.TrimSuffix(strings.TrimRight(cfg.ConsoleURL, "/"), "/console")
+	response, errUsage := doHostHTTP(callback, http.MethodGet, origin+"/zen/go/v1/usage", headers, nil)
+	if errUsage != nil {
+		return nil, fmt.Errorf("could not reach the OpenCode usage endpoint: %w", errUsage)
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("OpenCode usage endpoint returned HTTP %d", response.StatusCode)
+	}
+	var result struct {
+		Usage *openCodeUsage `json:"usage"`
+	}
+	if errUnmarshal := json.Unmarshal(response.Body, &result); errUnmarshal != nil || result.Usage == nil {
+		return nil, fmt.Errorf("OpenCode did not return subscription usage")
+	}
+	for _, meter := range []openCodeMeter{result.Usage.Rolling, result.Usage.Weekly, result.Usage.Monthly} {
+		if meter.Percent == nil || *meter.Percent < 0 || *meter.Percent > 100 {
+			return nil, fmt.Errorf("OpenCode returned an unsupported usage status")
+		}
+	}
+	// The console endpoint adds actual dollar amounts; it is optional.
+	if status, errStatus := doHostHTTP(callback, http.MethodGet, origin+"/console/api/go/status", headers, nil); errStatus == nil && status.StatusCode == http.StatusOK {
+		var data struct {
+			Access struct {
+				Meters struct {
+					FiveHour struct {
+						Used  string `json:"usedMicroCents"`
+						Limit string `json:"limitMicroCents"`
+						Reset string `json:"resetsAt"`
+					} `json:"fiveHour"`
+					Week struct {
+						Used  string `json:"usedMicroCents"`
+						Limit string `json:"limitMicroCents"`
+						Reset string `json:"resetsAt"`
+					} `json:"week"`
+					Month struct {
+						Used  string `json:"usedMicroCents"`
+						Limit string `json:"limitMicroCents"`
+						Reset string `json:"resetsAt"`
+					} `json:"month"`
+				} `json:"meters"`
+			} `json:"access"`
+		}
+		if json.Unmarshal(status.Body, &data) == nil {
+			apply := func(meter *openCodeMeter, usedRaw, limitRaw, reset string) {
+				used, errUsed := strconv.ParseFloat(strings.TrimSpace(usedRaw), 64)
+				limit, errLimit := strconv.ParseFloat(strings.TrimSpace(limitRaw), 64)
+				if errUsed != nil || errLimit != nil || used < 0 || limit <= 0 ||
+					math.IsInf(used, 0) || math.IsInf(limit, 0) || math.IsNaN(used) || math.IsNaN(limit) {
+					return
+				}
+				usedUSD, limitUSD := used/100000000, limit/100000000
+				meter.UsedUSD, meter.LimitUSD = &usedUSD, &limitUSD
+				meter.Percent = func() *float64 { p := used / limit * 100; return &p }()
+				if strings.TrimSpace(reset) != "" {
+					meter.ResetsAt = reset
+				}
+			}
+			apply(&result.Usage.Rolling, data.Access.Meters.FiveHour.Used, data.Access.Meters.FiveHour.Limit, data.Access.Meters.FiveHour.Reset)
+			apply(&result.Usage.Weekly, data.Access.Meters.Week.Used, data.Access.Meters.Week.Limit, data.Access.Meters.Week.Reset)
+			apply(&result.Usage.Monthly, data.Access.Meters.Month.Used, data.Access.Meters.Month.Limit, data.Access.Meters.Month.Reset)
+		}
+	}
+	return result.Usage, nil
+}
+
 func handleQuotaFetch(raw []byte) ([]byte, error) {
 	var req rpcQuotaFetchRequest
 	if len(raw) > 0 {
@@ -349,61 +449,47 @@ func handleQuotaFetch(raw []byte) ([]byte, error) {
 			return nil, errUnmarshal
 		}
 	}
-	now := time.Now().UTC()
+	token, orgID := extractAuthCredentials(req.StorageJSON, req.Attributes)
+	usage, errUsage := fetchUpstreamUsage(req.HostCallbackID, token, orgID)
+	if errUsage != nil {
+		return nil, errUsage
+	}
 	tierID, planLabel := planTierAndLabel(resolvePlanForAuth(req))
-	monthlyCaps := monthlyCapByPlan[tierID]
-
-	enabled, errEnabled := enabledModelsForAuth(req.AuthID)
-	if errEnabled != nil {
-		return nil, errEnabled
-	}
-
-	perModel := computeModelWindowTotals(req.AuthID, now)
-	groups := make([]pluginapi.QuotaGroup, 0, len(enabled))
-	for _, id := range enabled {
-		buckets := make([]pluginapi.QuotaBucket, 0, len(rollingWindows))
-		if unlimitedModels[id] {
-			for _, w := range rollingWindows {
-				buckets = append(buckets, pluginapi.QuotaBucket{
-					Window:            w.name,
-					RemainingFraction: 1,
-					Description:       "unlimited (free model, limited time)",
-				})
-			}
-		} else {
-			monthly, documented := monthlyCaps[id]
-			if !documented {
-				continue
-			}
-			usage := perModel[id]
-			for i, w := range rollingWindows {
-				capVal := monthly * windowShareOfMonthly[i]
-				rem := math.Min(math.Max(1.0-usage.allowance[i]/capVal, 0), 1)
-				resetAt := now.Add(w.dur)
-				if !usage.oldest[i].IsZero() {
-					resetAt = usage.oldest[i].Add(w.dur)
-				}
-				buckets = append(buckets, pluginapi.QuotaBucket{
-					Window:            w.name,
-					RemainingFraction: math.Round(rem*10000) / 10000,
-					ResetTime:         resetAt.Format(time.RFC3339),
-					Description:       fmt.Sprintf("$%.4f / $%.2f allowance used (%.1f%% remaining)", usage.allowance[i], capVal, rem*100),
-				})
-			}
+	makeBucket := func(name string, meter openCodeMeter) pluginapi.QuotaBucket {
+		used := 0.0
+		if meter.Percent != nil {
+			used = *meter.Percent
 		}
-		groups = append(groups, pluginapi.QuotaGroup{
-			DisplayName: lookupModelSpec(id).DisplayName,
-			Buckets:     buckets,
-		})
+		remaining := math.Max(0, math.Min(1, 1-used/100))
+		if meter.Status == "rate-limited" {
+			remaining = 0
+		}
+		description := fmt.Sprintf("%s (%.0f%% used)", name, used)
+		if meter.UsedUSD != nil && meter.LimitUSD != nil {
+			remainingUSD := math.Max(0, *meter.LimitUSD-*meter.UsedUSD)
+			description = fmt.Sprintf("%s ($%.2f left / $%.2f)", name, remainingUSD, *meter.LimitUSD)
+		}
+		return pluginapi.QuotaBucket{
+			Window:            name,
+			RemainingFraction: math.Round(remaining*10000) / 10000,
+			ResetTime:         meter.ResetsAt,
+			Description:       description,
+		}
 	}
-
 	return okEnvelope(pluginapi.QuotaFetchResponse{
 		Subscription: &pluginapi.QuotaSubscription{
 			Plan:     planLabel,
 			TierName: planLabel,
 			TierID:   tierID,
 		},
-		Groups: groups,
+		Groups: []pluginapi.QuotaGroup{{
+			DisplayName: "OpenCode Go",
+			Buckets: []pluginapi.QuotaBucket{
+				makeBucket("5h", usage.Rolling),
+				makeBucket("weekly", usage.Weekly),
+				makeBucket("monthly", usage.Monthly),
+			},
+		}},
 	})
 }
 

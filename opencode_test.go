@@ -194,27 +194,86 @@ func TestExecuteRoutesAcrossAllFourProtocolsAndTracksAllowance(t *testing.T) {
 	if _, errModels := handleModelForAuth([]byte(`{"AuthID":"opencode-go.json","AuthProvider":"opencode-go","Attributes":{"excluded_models":"gpt-*"}}`)); errModels != nil {
 		t.Fatalf("handleModelForAuth: %v", errModels)
 	}
-	quotaRaw, errQuota := handleQuotaFetch([]byte(`{"auth_id":"opencode-go.json"}`))
+
+	// Quota reports the account-wide meters, not process-local per-model counters.
+	hostCallHook = func(method string, payload any) (json.RawMessage, error) {
+		raw, _ := json.Marshal(payload)
+		targetURL := gjson.GetBytes(raw, "url").String()
+		switch {
+		case strings.HasSuffix(targetURL, "/zen/go/v1/usage"):
+			return marshalJSONNoEscape(pluginapi.HTTPResponse{
+				StatusCode: http.StatusOK,
+				Body:       []byte(`{"usage":{"rolling":{"status":"ok","percent":90,"resetsAt":"2026-11-16T19:44:35Z"},"weekly":{"status":"ok","percent":44,"resetsAt":"2026-11-23T00:00:00Z"},"monthly":{"status":"ok","percent":80,"resetsAt":"2026-11-27T21:09:46Z"}}}`),
+			})
+		case strings.HasSuffix(targetURL, "/console/api/go/status"):
+			return marshalJSONNoEscape(pluginapi.HTTPResponse{
+				StatusCode: http.StatusOK,
+				Body:       []byte(`{"access":{"meters":{"fiveHour":{"usedMicroCents":"1091501567","limitMicroCents":"1200000000","resetsAt":"2026-11-16T19:44:35Z"},"week":{"usedMicroCents":"1342513245","limitMicroCents":"3000000000","resetsAt":"2026-11-23T00:00:00Z"},"month":{"usedMicroCents":"4815655284","limitMicroCents":"6000000000","resetsAt":"2026-11-27T21:09:46Z"}}}}`),
+			})
+		default:
+			t.Fatalf("unexpected quota URL: %s", targetURL)
+			return nil, nil
+		}
+	}
+	quotaReq, _ := json.Marshal(rpcQuotaFetchRequest{
+		QuotaFetchRequest: pluginapi.QuotaFetchRequest{
+			AuthID:      "opencode-go.json",
+			StorageJSON: []byte(`{"type":"opencode-go","access_token":"st_tok","org_id":"org_abc"}`),
+		},
+		HostCallbackID: "cb-1",
+	})
+	quotaRaw, errQuota := handleQuotaFetch(quotaReq)
 	if errQuota != nil {
 		t.Fatalf("handleQuotaFetch: %v", errQuota)
 	}
 	if gjson.GetBytes(quotaRaw, "result.subscription.tierId").String() != "go-plus" {
 		t.Fatalf("unexpected quota subscription: %s", string(quotaRaw))
 	}
-	groups := gjson.GetBytes(quotaRaw, "result.groups")
-	// GLM-5.3 on Go Plus: $120/mo cap, so the 5h window is $24 and the weekly window $60.
-	glm := groups.Get(`#(displayName=="GLM-5.3")`)
-	if glm.Get("buckets.0.description").String() != "$0.0040 / $24.00 allowance used (100.0% remaining)" ||
-		glm.Get("buckets.1.description").String() != "$0.0040 / $60.00 allowance used (100.0% remaining)" {
-		t.Fatalf("unexpected GLM-5.3 group: %s", glm.Raw)
+	group := gjson.GetBytes(quotaRaw, "result.groups.0")
+	if group.Get("displayName").String() != "OpenCode Go" {
+		t.Fatalf("unexpected quota group: %s", group.Raw)
 	}
-	if groups.Get(`#(displayName=="Beam Free").buckets.0.remainingFraction`).Float() != 1 {
-		t.Fatalf("Beam Free not reported unlimited: %s", groups.Raw)
+	if group.Get("buckets.0.description").String() != "5h ($1.08 left / $12.00)" {
+		t.Fatalf("unexpected 5h bucket: %s", group.Get("buckets.0").Raw)
 	}
-	if groups.Get(`#(displayName=="GPT-6 Luna")`).Exists() {
-		t.Fatalf("excluded model GPT-6 Luna has a quota group: %s", groups.Raw)
+	if rem := group.Get("buckets.0.remainingFraction").Float(); rem < 0.09 || rem > 0.10 {
+		t.Fatalf("5h remaining = %v, want about 0.09", rem)
 	}
-	if groups.Get(`#(displayName=="GLM-5.1")`).Exists() {
-		t.Fatalf("model without a published cap has a quota group: %s", groups.Raw)
+	if group.Get("buckets.2.description").String() != "monthly ($11.84 left / $60.00)" {
+		t.Fatalf("unexpected monthly bucket: %s", group.Get("buckets.2").Raw)
+	}
+	if group.Get("buckets.2.resetTime").String() != "2026-11-27T21:09:46Z" {
+		t.Fatalf("unexpected monthly reset: %s", group.Get("buckets.2").Raw)
+	}
+}
+
+func TestFinalizeChatPayloadDowngradesDeveloperRole(t *testing.T) {
+	in := []byte(`{"model":"x","messages":[` +
+		`{"role":"system","content":"a"},` +
+		`{"role":"developer","content":"b"},` +
+		`{"role":"user","content":"c"},` +
+		`{"role":"developer","content":[{"type":"text","text":"d"}]}]}`)
+	spec := goModelSpec{Protocol: wireProtocolChatCompletions}
+	out := finalizeWirePayload(in, spec, "kimi-k2.7-code", "", false, true)
+
+	want := []string{"system", "system", "user", "system"}
+	messages := gjson.GetBytes(out, "messages").Array()
+	if len(messages) != len(want) {
+		t.Fatalf("messages count = %d, want %d: %s", len(messages), len(want), out)
+	}
+	for i, message := range messages {
+		if got := message.Get("role").String(); got != want[i] {
+			t.Fatalf("messages[%d].role = %q, want %q: %s", i, got, want[i], out)
+		}
+	}
+}
+
+func TestAuthDataHasNoBaseURL(t *testing.T) {
+	auth := buildAuthDataFromCredential(storedCredential{AccessToken: "tok", OrgID: "org"}, "f.json", "f.json")
+	if value, ok := auth.Attributes["base_url"]; ok {
+		t.Fatalf("auth attributes must not carry base_url, got %q", value)
+	}
+	if auth.Attributes["api_key"] != "tok" {
+		t.Fatalf("api_key attribute = %q, want tok", auth.Attributes["api_key"])
 	}
 }
