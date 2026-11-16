@@ -7,7 +7,8 @@ This ABI v1 plugin adds **OpenCode Go / Go Plus** (`opencode-go`) support to CLI
   - **OpenAI Responses** (`/inference/go/openai/v1/responses`): `gpt-6-luna`, `gpt-5.6-luna`, `grok-4.7`, `grok-4.6`, `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`
   - **Anthropic Messages** (`/inference/go/anthropic/v1/messages`): `claude-haiku-5-5`, `minimax-m3`, `minimax-m2.7`, `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-plus`
   - **Google Gemini** (`/inference/go/google/v1beta/models/<model>:generateContent`): `gemini-4-argon`, `gemini-4-argon-contributor`
-- **Quota & Per-Model Allowance Telemetry**: Extracts `usage.opencode` (`billing_source`, `list_cost`, `allowance`, token breakdown) from every response, exposes one quota group per model enabled for the credential (honoring `excluded_models` / `oauth-excluded-models`) via `QuotaProvider`. Each model is tracked against its own published monthly cap for the plan, with 5-hour (20%), weekly (50%) and monthly (100%) rolling buckets. Free models show as unlimited; models without a published cap are omitted.
+- **Quota & Allowance Telemetry**: Reads the credential's real 5-hour, weekly and monthly meters from OpenCode (`/zen/go/v1/usage`, enriched with dollar amounts from `/console/api/go/status`) and exposes one account-wide `OpenCode Go` quota group via `QuotaProvider`. `usage.opencode` per-model telemetry is still extracted from responses for local diagnostics, but it is no longer used for the quota card: it only sees requests routed through this plugin and resets when the process restarts.
+- **Plugin executor routing**: Auth data deliberately omits `base_url`, so CLIProxyAPI uses this plugin's multi-protocol executor instead of its generic OpenAI-compatible executor. Chat Completions payloads also rewrite the `developer` role to `system` for backends that reject it.
 
 ## Build
 
