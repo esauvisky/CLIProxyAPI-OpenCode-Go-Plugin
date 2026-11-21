@@ -91,8 +91,67 @@ func TestDeviceOAuthFlowAndCredentialParse(t *testing.T) {
 	if pollEnv.Result.Auth.Attributes["header:x-opencode-session"] != "cpa-main" {
 		t.Fatalf("expected x-opencode-session=cpa-main, got %#v", pollEnv.Result.Auth.Attributes)
 	}
+	if pollEnv.Result.Auth.Attributes["header:User-Agent"] != defaultUserAgent {
+		t.Fatalf("expected header:User-Agent=%q, got %#v", defaultUserAgent, pollEnv.Result.Auth.Attributes)
+	}
+	if _, hasBaseURL := pollEnv.Result.Auth.Attributes["base_url"]; hasBaseURL {
+		t.Fatalf("auth attributes must not set base_url (causes host OpenAI-compat hijack): %#v", pollEnv.Result.Auth.Attributes)
+	}
 	if pollEnv.Result.Auth.Attributes["org_id"] != "org_123" {
 		t.Fatalf("expected org_id=org_123, got %#v", pollEnv.Result.Auth.Attributes)
+	}
+}
+
+func TestUserAgentEnforcedAgainstClientOverride(t *testing.T) {
+	prevHook := hostCallHook
+	t.Cleanup(func() { hostCallHook = prevHook })
+
+	var seenUA string
+	hostCallHook = func(method string, payload any) (json.RawMessage, error) {
+		raw, _ := json.Marshal(payload)
+		seenUA = gjson.GetBytes(raw, "headers.User-Agent.0").String()
+		return marshalJSONNoEscape(pluginapi.HTTPResponse{
+			StatusCode: http.StatusOK,
+			Headers:    http.Header{"Content-Type": []string{"application/json"}},
+			Body:       []byte(`{"id":"chatcmpl-ua","object":"chat.completion","model":"deepseek-v4.1-flash","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`),
+		})
+	}
+
+	execReq, _ := json.Marshal(rpcExecutorRequest{
+		ExecutorRequest: pluginapi.ExecutorRequest{
+			AuthID:         "opencode-go.json",
+			AuthProvider:   pluginID,
+			Model:          "deepseek-v4.1-flash",
+			Format:         "openai",
+			SourceFormat:   "openai",
+			Headers:        http.Header{"User-Agent": []string{"Python-urllib/3.12"}},
+			Payload:        []byte(`{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}]}`),
+			StorageJSON:    []byte(`{"type":"opencode-go","access_token":"st_tok","org_id":"org_abc"}`),
+			AuthAttributes: map[string]string{"org_id": "org_abc"},
+		},
+	})
+	if _, errExec := handleExecutorExecute(execReq); errExec != nil {
+		t.Fatalf("handleExecutorExecute: %v", errExec)
+	}
+	if seenUA != defaultUserAgent {
+		t.Fatalf("execute User-Agent = %q, want %q", seenUA, defaultUserAgent)
+	}
+
+	seenUA = ""
+	httpReq, _ := json.Marshal(rpcExecutorHTTPRequest{
+		ExecutorHTTPRequest: pluginapi.ExecutorHTTPRequest{
+			Method:      http.MethodPost,
+			URL:         "https://opencode.ai/inference/go/openai/v1/chat/completions",
+			Headers:     http.Header{"User-Agent": []string{"Python-urllib/3.12"}},
+			Body:        []byte(`{"model":"deepseek-v4.1-flash"}`),
+			StorageJSON: []byte(`{"type":"opencode-go","access_token":"st_tok","org_id":"org_abc"}`),
+		},
+	})
+	if _, errHTTP := handleExecutorHTTPRequest(httpReq); errHTTP != nil {
+		t.Fatalf("handleExecutorHTTPRequest: %v", errHTTP)
+	}
+	if seenUA != defaultUserAgent {
+		t.Fatalf("http_request User-Agent = %q, want %q", seenUA, defaultUserAgent)
 	}
 }
 

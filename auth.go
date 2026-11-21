@@ -207,8 +207,8 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 
 	token := firstNonEmpty(cred.AccessToken, cred.APIKey)
 	attrs := map[string]string{
-		"api_key":  token,
-		"base_url": currentConfig().InferenceBaseURL + "/openai/v1",
+		"api_key":           token,
+		"header:User-Agent": currentConfig().UserAgent,
 	}
 	if cred.OrgID != "" {
 		attrs["org_id"] = cred.OrgID

@@ -112,6 +112,7 @@ func handleExecutorHTTPRequest(raw []byte) ([]byte, error) {
 	if headers.Get("x-opencode-session") == "" {
 		headers.Set("x-opencode-session", resolveSessionHeader(req.Headers, nil))
 	}
+	headers.Set("User-Agent", currentConfig().UserAgent)
 	resp, errHTTP := doHostHTTP(req.HostCallbackID, req.Method, req.URL, headers, req.Body)
 	if errHTTP != nil {
 		return nil, errHTTP
