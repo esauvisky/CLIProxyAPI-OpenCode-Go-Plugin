@@ -202,6 +202,9 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 				nextRefresh = time.Now().UTC().Add(10 * time.Second)
 			}
 		}
+	} else if cred.RefreshToken != "" {
+		// unknown expiry: refresh right away, the refresh response sets a real one
+		nextRefresh = time.Now().UTC().Add(10 * time.Second)
 	}
 	storageBytes, _ := marshalJSONNoEscape(storageMap)
 
@@ -230,6 +233,10 @@ func buildAuthDataFromCredential(cred storedCredential, fileName, path string) p
 	}
 	if cred.Plan != "" {
 		meta["plan"] = cred.Plan
+	}
+	if cred.RefreshToken != "" {
+		// the host only refreshes after an upstream 401 when metadata carries refresh_token
+		meta["refresh_token"] = cred.RefreshToken
 	}
 	if cred.ExpiresAtMs > 0 {
 		meta["expired"] = time.UnixMilli(cred.ExpiresAtMs).UTC().Format(time.RFC3339)
